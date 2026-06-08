@@ -574,12 +574,15 @@ function renderMainTable(rows, segments, perSegment) {
 
   if (grouping === 'delivery') {
     const totalRevenue = rows.reduce((a,r) => a + r.total, 0);
+    // Standard не показываем отдельно — доплаты за неё нет, её стоимость заложена
+    // в базовую цену и уже учтена в общей валовой марже, отдельная маржа по ней не считается
+    const dGroups = groups.filter(g => g.key !== 'Standard');
     table.querySelector('thead').innerHTML = `<tr>
       <th>Вид доставки</th><th>Заказов</th><th>Выручка заказа</th>
       <th>Доплата за доставку</th><th>С/С доставки</th><th>Доля комиссий</th>
       <th>Маржа доставки</th><th>Маржа, % от доплаты</th>
     </tr>`;
-    table.querySelector('tbody').innerHTML = groups.map(g => `
+    table.querySelector('tbody').innerHTML = dGroups.map(g => `
       <tr>
         <td>${g.key}</td>
         <td>${fmtN(g.orders)}</td>
@@ -589,7 +592,7 @@ function renderMainTable(rows, segments, perSegment) {
         <td class="t-purple">${fmt(g.deliveryCommission)}</td>
         <td class="${g.deliveryMargin >= 0 ? 't-green' : 't-red'}">${fmt(g.deliveryMargin)}</td>
         <td>${pct(g.deliveryMargin, g.deliveryRevenue)}</td>
-      </tr>`).join('') + totalRow(groups, totalRevenue);
+      </tr>`).join('') + totalRow(dGroups, totalRevenue);
     return;
   }
 
