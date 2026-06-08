@@ -75,8 +75,10 @@ footer{font-size:.74rem;color:#4a5568;text-align:center;margin-top:30px;padding-
 </header>
 
 <div class="tabs" style="margin-bottom:20px">
-  <button class="btn active" id="tab-btn-report" onclick="switchTab('report')">Отчёт</button>
-  <button class="btn"        id="tab-btn-costs"  onclick="switchTab('costs')">Затраты</button>
+  <button class="btn active" id="tab-btn-report"   onclick="switchTab('report')">Отчёт</button>
+  <button class="btn"        id="tab-btn-delivery" onclick="switchTab('delivery')">Маржа доставки</button>
+  <button class="btn"        id="tab-btn-frames"   onclick="switchTab('frames')">Маржа рам</button>
+  <button class="btn"        id="tab-btn-costs"    onclick="switchTab('costs')">Затраты</button>
 </div>
 
 <div id="tab-report">
@@ -98,7 +100,6 @@ footer{font-size:.74rem;color:#4a5568;text-align:center;margin-top:30px;padding-
       <button class="btn"        id="grp-sourceDetail" onclick="setGroup('sourceDetail')">По источнику (детально)</button>
       <button class="btn"        id="grp-cross"        onclick="setGroup('cross')">Магазин × группа</button>
       <button class="btn"        id="grp-crossDetail"  onclick="setGroup('crossDetail')">Магазин × источник (детально)</button>
-      <button class="btn"        id="grp-delivery"     onclick="setGroup('delivery')">По виду доставки</button>
     </div>
   </div>
 </div>
@@ -109,17 +110,6 @@ footer{font-size:.74rem;color:#4a5568;text-align:center;margin-top:30px;padding-
   <div class="section-title" id="tableTitle">Свод</div>
   <div class="table-wrap scroll-x">
     <table id="mainTable"><thead></thead><tbody></tbody></table>
-  </div>
-</section>
-
-<section>
-  <div class="section-title">Маржинальность рам</div>
-  <p class="hint">
-    Маржа = цена рамы для клиента минус С/С рамы минус доля комиссий
-    (комиссии распределяются пропорционально доле цены рамы в общей сумме заказа — те же колонки комиссий, что и для доставки).
-  </p>
-  <div class="table-wrap scroll-x">
-    <table id="frameTable"><thead></thead><tbody></tbody></table>
   </div>
 </section>
 
@@ -151,6 +141,34 @@ footer{font-size:.74rem;color:#4a5568;text-align:center;margin-top:30px;padding-
 </section>
 
 </div><!-- /tab-report -->
+
+<div id="tab-delivery" style="display:none">
+<section>
+  <div class="section-title">Маржинальность по виду доставки</div>
+  <p class="hint">
+    Маржа = доплата за доставку (то, что платит клиент сверх базовой цены) минус С/С доставки минус доля комиссий
+    (комиссии распределяются пропорционально доле доплаты за доставку в общей сумме заказа).
+    Standard не показан отдельно — доплаты за неё нет, её стоимость заложена в базовую цену
+    и уже учтена в общей валовой марже.
+  </p>
+  <div class="table-wrap scroll-x">
+    <table id="deliveryMarginTable"><thead></thead><tbody></tbody></table>
+  </div>
+</section>
+</div><!-- /tab-delivery -->
+
+<div id="tab-frames" style="display:none">
+<section>
+  <div class="section-title">Маржинальность рам</div>
+  <p class="hint">
+    Маржа = цена рамы для клиента минус С/С рамы минус доля комиссий
+    (комиссии распределяются пропорционально доле цены рамы в общей сумме заказа — те же колонки комиссий, что и для доставки).
+  </p>
+  <div class="table-wrap scroll-x">
+    <table id="frameTable"><thead></thead><tbody></tbody></table>
+  </div>
+</section>
+</div><!-- /tab-frames -->
 
 <div id="tab-costs" style="display:none">
 
@@ -393,7 +411,7 @@ function groupOf(source) {
 ══════════════════════════════════════ */
 function setGroup(g) {
   grouping = g;
-  ['shop','source','sourceDetail','cross','crossDetail','delivery'].forEach(x => {
+  ['shop','source','sourceDetail','cross','crossDetail'].forEach(x => {
     document.getElementById('grp-'+x).classList.toggle('active', x===g);
   });
   render();
@@ -493,6 +511,7 @@ function render() {
 
   renderCards(rows, segments, perSegment);
   renderMainTable(rows, segments, perSegment);
+  renderDeliveryMarginTable(rows);
   renderFrameTable(rows);
   renderCostsTable(breakdown);
   renderGroupRules();
@@ -528,7 +547,8 @@ function groupKeyFor(mode, o) {
   if (mode === 'sourceDetail') return o.source;
   if (mode === 'cross') return o.shop + ' · ' + o.sourceGroup;
   if (mode === 'crossDetail') return o.shop + ' · ' + o.source;
-  return o.delivery;
+  if (mode === 'delivery') return o.delivery;
+  return o.shop + ' · ' + o.sourceGroup;
 }
 
 function groupRowsBy(rows, mode) {
@@ -557,8 +577,6 @@ function groupRowsBy(rows, mode) {
   return [...map.values()].sort((a,b) => b.revenue - a.revenue);
 }
 
-// для всех группировок, кроме delivery, считаем чистую прибыль (с распределёнными ручными затратами);
-// для delivery — это просто аналитический срез по стоимости доставки, без привязки к чистой прибыли
 function renderMainTable(rows, segments, perSegment) {
   const titles = {
     shop:        'Свод по магазинам',
@@ -566,35 +584,10 @@ function renderMainTable(rows, segments, perSegment) {
     sourceDetail:'Свод по источникам (детально)',
     cross:       'Свод по магазину × группе источников',
     crossDetail: 'Свод по магазину × источнику (детально)',
-    delivery:    'Маржинальность по виду доставки',
   };
   document.getElementById('tableTitle').textContent = titles[grouping];
   const groups = groupRowsBy(rows, grouping);
   const table = document.getElementById('mainTable');
-
-  if (grouping === 'delivery') {
-    const totalRevenue = rows.reduce((a,r) => a + r.total, 0);
-    // Standard не показываем отдельно — доплаты за неё нет, её стоимость заложена
-    // в базовую цену и уже учтена в общей валовой марже, отдельная маржа по ней не считается
-    const dGroups = groups.filter(g => g.key !== 'Standard');
-    table.querySelector('thead').innerHTML = `<tr>
-      <th>Вид доставки</th><th>Заказов</th><th>Выручка заказа</th>
-      <th>Доплата за доставку</th><th>С/С доставки</th><th>Доля комиссий</th>
-      <th>Маржа доставки</th><th>Маржа, % от доплаты</th>
-    </tr>`;
-    table.querySelector('tbody').innerHTML = dGroups.map(g => `
-      <tr>
-        <td>${g.key}</td>
-        <td>${fmtN(g.orders)}</td>
-        <td>${fmt(g.revenue)}</td>
-        <td>${fmt(g.deliveryRevenue)}</td>
-        <td class="t-purple">${fmt(g.deliveryCost)}</td>
-        <td class="t-purple">${fmt(g.deliveryCommission)}</td>
-        <td class="${g.deliveryMargin >= 0 ? 't-green' : 't-red'}">${fmt(g.deliveryMargin)}</td>
-        <td>${pct(g.deliveryMargin, g.deliveryRevenue)}</td>
-      </tr>`).join('') + totalRow(dGroups, totalRevenue);
-    return;
-  }
 
   table.querySelector('thead').innerHTML = `<tr>
     <th>Сегмент</th><th>Заказов</th><th>Выручка</th><th>Валовая прибыль</th><th>Маржа вал.</th>
@@ -622,23 +615,45 @@ function renderMainTable(rows, segments, perSegment) {
   }).join('') + totalRowPnL(groups, perSegment, segments);
 }
 
-function totalRow(groups, totalRevenue) {
-  const orders = groups.reduce((a,g) => a + g.orders, 0);
-  const revenue = groups.reduce((a,g) => a + g.revenue, 0);
-  const deliveryCost = groups.reduce((a,g) => a + g.deliveryCost, 0);
-  const deliveryRevenue = groups.reduce((a,g) => a + g.deliveryRevenue, 0);
-  const deliveryCommission = groups.reduce((a,g) => a + g.deliveryCommission, 0);
-  const deliveryMargin = groups.reduce((a,g) => a + g.deliveryMargin, 0);
-  return `<tr class="total">
-    <td>Итого</td>
-    <td>${fmtN(orders)}</td>
-    <td>${fmt(revenue)}</td>
-    <td>${fmt(deliveryRevenue)}</td>
-    <td>${fmt(deliveryCost)}</td>
-    <td>${fmt(deliveryCommission)}</td>
-    <td class="${deliveryMargin >= 0 ? 't-green' : 't-red'}">${fmt(deliveryMargin)}</td>
-    <td>${pct(deliveryMargin, deliveryRevenue)}</td>
+// маржа по доставке — отдельная вкладка, не связанная с группировкой основного отчёта;
+// Standard не показываем — доплаты за неё нет, её стоимость заложена в базовую цену
+// и уже учтена в общей валовой марже, отдельная маржа по ней не считается
+function renderDeliveryMarginTable(rows) {
+  const groups = groupRowsBy(rows, 'delivery').filter(g => g.key !== 'Standard');
+  const table = document.getElementById('deliveryMarginTable');
+  table.querySelector('thead').innerHTML = `<tr>
+    <th>Вид доставки</th><th>Заказов</th><th>Выручка заказа</th>
+    <th>Доплата за доставку</th><th>С/С доставки</th><th>Доля комиссий</th>
+    <th>Маржа доставки</th><th>Маржа, % от доплаты</th>
   </tr>`;
+  table.querySelector('tbody').innerHTML = groups.map(g => `
+    <tr>
+      <td>${g.key}</td>
+      <td>${fmtN(g.orders)}</td>
+      <td>${fmt(g.revenue)}</td>
+      <td>${fmt(g.deliveryRevenue)}</td>
+      <td class="t-purple">${fmt(g.deliveryCost)}</td>
+      <td class="t-purple">${fmt(g.deliveryCommission)}</td>
+      <td class="${g.deliveryMargin >= 0 ? 't-green' : 't-red'}">${fmt(g.deliveryMargin)}</td>
+      <td>${pct(g.deliveryMargin, g.deliveryRevenue)}</td>
+    </tr>`).join('') + (() => {
+      const orders = groups.reduce((a,g) => a + g.orders, 0);
+      const revenue = groups.reduce((a,g) => a + g.revenue, 0);
+      const deliveryRevenue = groups.reduce((a,g) => a + g.deliveryRevenue, 0);
+      const deliveryCost = groups.reduce((a,g) => a + g.deliveryCost, 0);
+      const deliveryCommission = groups.reduce((a,g) => a + g.deliveryCommission, 0);
+      const deliveryMargin = groups.reduce((a,g) => a + g.deliveryMargin, 0);
+      return `<tr class="total">
+        <td>Итого</td>
+        <td>${fmtN(orders)}</td>
+        <td>${fmt(revenue)}</td>
+        <td>${fmt(deliveryRevenue)}</td>
+        <td>${fmt(deliveryCost)}</td>
+        <td>${fmt(deliveryCommission)}</td>
+        <td class="${deliveryMargin >= 0 ? 't-green' : 't-red'}">${fmt(deliveryMargin)}</td>
+        <td>${pct(deliveryMargin, deliveryRevenue)}</td>
+      </tr>`;
+    })();
 }
 
 // маржа по рамам считается так же, как по доставке, но в разрезе магазина —
@@ -745,10 +760,10 @@ function renderGroupRules() {
 ══════════════════════════════════════ */
 function switchTab(name) {
   activeTab = name;
-  document.getElementById('tab-report').style.display = name === 'report' ? '' : 'none';
-  document.getElementById('tab-costs').style.display  = name === 'costs'  ? '' : 'none';
-  document.getElementById('tab-btn-report').classList.toggle('active', name === 'report');
-  document.getElementById('tab-btn-costs').classList.toggle('active', name === 'costs');
+  ['report', 'delivery', 'frames', 'costs'].forEach(t => {
+    document.getElementById('tab-'+t).style.display = name === t ? '' : 'none';
+    document.getElementById('tab-btn-'+t).classList.toggle('active', name === t);
+  });
   if (name === 'costs') renderCostsEditor();
 }
 
