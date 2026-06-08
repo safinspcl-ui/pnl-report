@@ -182,6 +182,18 @@ footer{font-size:.74rem;color:#4a5568;text-align:center;margin-top:30px;padding-
   </p>
   <div class="controls">
     <div class="ctrl-row">
+      <span class="ctrl-label">Сотрудник из ЗП</span>
+      <select id="ce-employee" onchange="fillFromEmployee()">
+        <option value="">— выбрать, чтобы подставить имя и сумму —</option>
+      </select>
+      <span class="hint" style="margin:0;max-width:520px">
+        Чтобы вручную разбить зарплату конкретного сотрудника между источниками — выберите его здесь
+        (имя и полная сумма за месяц подставятся в поля ниже), задайте долю и охват (например, «Etsy»),
+        нажмите «Добавить статью», затем повторите для остальных частей с тем же именем, но другим
+        охватом и остатком суммы. Каждая часть ляжет ровно в указанный сегмент (метод «none»).
+      </span>
+    </div>
+    <div class="ctrl-row">
       <span class="ctrl-label">Статья</span>
       <input type="text" id="ce-article" placeholder="например, Маркетинг Etsy">
       <span class="ctrl-label" style="min-width:60px">Сумма, $</span>
@@ -297,6 +309,8 @@ let colIdx = {};      // карта "название колонки" -> инд�
 let activeTab = 'report';
 let payrollAmount = null;   // сумма «ПІДСУМОК» из таблицы зарплат за выбранный месяц (null — ещё не загружено/нет данных)
 let payrollLabel = '';      // подпись месяца, под который подобрана сумма (например, «Травень 2026»)
+let salaryRows = [];        // [{ name, amount }] — построчная разбивка ЗП за месяц (без строки «ПІДСУМОК»),
+                            // нужна, чтобы вручную распределить зарплату конкретного сотрудника по источникам
 
 // Рабочий список ручных статей затрат — то, что реально использует отчёт.
 // Изначально берётся из localStorage (правки из визуального редактора), а если там пусто — из MANUAL_COSTS.
@@ -353,14 +367,18 @@ function parseSalary(json) {
   const label = UA_MONTHS[m - 1] + ' ' + y;
   payrollLabel = label;
   payrollAmount = null;
+  salaryRows = [];
   const colI = cols.indexOf(label);
   if (colI < 0) return;
   for (const row of json.table.rows) {
     const c = row.c || [];
     const name = c[0] && c[0].v != null ? String(c[0].v).trim() : '';
+    if (!name) continue;
+    const amount = c[colI] && c[colI].v != null ? num(c[colI].v) : 0;
     if (name === SALARY_TOTAL_ROW) {
-      payrollAmount = c[colI] && c[colI].v != null ? num(c[colI].v) : 0;
-      break;
+      payrollAmount = amount;
+    } else {
+      salaryRows.push({ name, amount });
     }
   }
 }
@@ -837,6 +855,27 @@ function populateCostFormSelects() {
   shopSel.innerHTML = scopeOptions('shop').map(v => `<option value="${v}">${v === 'all' ? 'все магазины' : v}</option>`).join('');
   groupSel.innerHTML = scopeOptions('sourceGroup').map(v => `<option value="${v}">${v === 'all' ? 'все группы' : v}</option>`).join('');
   detailSel.innerHTML = scopeOptions('source').map(v => `<option value="${v}">${v === 'all' ? 'все источники' : v}</option>`).join('');
+
+  const empSel = document.getElementById('ce-employee');
+  const prevEmp = empSel.value;
+  empSel.innerHTML = '<option value="">— выбрать, чтобы подставить имя и сумму —</option>' +
+    salaryRows.map((e, i) => `<option value="${i}">${e.name} — ${fmt(e.amount)}${payrollLabel ? ' (' + payrollLabel + ')' : ''}</option>`).join('');
+  if (prevEmp && [...empSel.options].some(o => o.value === prevEmp)) empSel.value = prevEmp;
+}
+
+// подставляет в форму имя и полную сумму выбранного сотрудника/отдела за месяц —
+// дальше пользователь меняет сумму на нужную долю, выбирает охват (магазин/источник)
+// и жмёт «Добавить статью»; повторяя с тем же именем, но другим охватом и остатком суммы,
+// можно вручную разнести зарплату одного человека по разным источникам
+function fillFromEmployee() {
+  const sel = document.getElementById('ce-employee');
+  const idx = sel.value;
+  if (idx === '') return;
+  const e = salaryRows[+idx];
+  if (!e) return;
+  document.getElementById('ce-article').value = e.name;
+  document.getElementById('ce-amount').value = e.amount;
+  document.getElementById('ce-allocate').value = 'none';
 }
 
 function addCostEntry() {
