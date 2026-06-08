@@ -113,6 +113,17 @@ footer{font-size:.74rem;color:#4a5568;text-align:center;margin-top:30px;padding-
 </section>
 
 <section>
+  <div class="section-title">Маржинальность рам</div>
+  <p class="hint">
+    Маржа = цена рамы для клиента минус С/С рамы минус доля комиссий
+    (комиссии распределяются пропорционально доле цены рамы в общей сумме заказа — те же колонки комиссий, что и для доставки).
+  </p>
+  <div class="table-wrap scroll-x">
+    <table id="frameTable"><thead></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<section>
   <div class="section-title">Ручные затраты (ФОТ, маркетинг, ОПР…)</div>
   <p class="hint">
     Эти статьи не приходят из таблицы сделок — они заданы во вкладке «<a href="javascript:switchTab('costs')" style="color:#76e4f7">Затраты</a>».
@@ -242,6 +253,13 @@ const MANUAL_COSTS = [
 const MIN_DATE = '2026-05-01';
 const MAX_DATE = '2026-05-31';
 
+// колонки комиссий (со скриншота) — их сумма распределяется пропорционально
+// между составляющими заказа (доставка, рама, …) при расчёте маржи
+const COMMISSION_COLUMNS = [
+  'Etsy Transaction fee', 'Etsy Processing fee', 'Etsy Listing fee', 'НДС',
+  'PayPal fee', 'Stripe fee', 'Westernbid', 'Вывод в USDT',
+];
+
 /* ══════════════════════════════════════
    СОСТОЯНИЕ
 ══════════════════════════════════════ */
@@ -317,6 +335,10 @@ function parseGviz(json) {
     if (!(n in colIdx)) throw new Error('Не найдена колонка «' + n + '»');
   }
   const cDeliveryCost = colIdx['Вся доставка'];
+  const cExpress      = colIdx['Стоимость экспресс'];
+  const cFrameRevenue = colIdx['Стоимость рамы'];
+  const cFrameCost    = colIdx['С/С рамы'];
+  const cCommissions  = COMMISSION_COLUMNS.map(n => colIdx[n]).filter(i => i != null);
 
   allRows = [];
   for (const row of json.table.rows) {
@@ -327,14 +349,34 @@ function parseGviz(json) {
     const shop = String(v(colIdx['ПЧ/ХМ']) || '').trim();
     const source = String(v(colIdx['Источник']) || '').trim();
     if (!shop) continue;
+
+    const total = num(v(colIdx['Общая сумма']));
+    const deliveryCost = cDeliveryCost != null ? num(v(cDeliveryCost)) : 0;
+    const deliveryRevenue = cExpress != null ? num(v(cExpress)) : 0;
+    const frameRevenue = cFrameRevenue != null ? num(v(cFrameRevenue)) : 0;
+    const frameCost = cFrameCost != null ? num(v(cFrameCost)) : 0;
+    const commissions = cCommissions.reduce((a, i) => a + num(v(i)), 0);
+
+    // комиссии распределяются между составляющими заказа пропорционально их доле
+    // в общей сумме заказа — так каждая часть несёт свою справедливую долю расходов на оплату
+    const deliveryCommission = total ? commissions * (deliveryRevenue / total) : 0;
+    const frameCommission = total ? commissions * (frameRevenue / total) : 0;
+
     allRows.push({
       shop, source,
       sourceGroup: groupOf(source),
       date,
       delivery: String(v(colIdx['Вид доставки']) || '').trim() || '—',
-      total: num(v(colIdx['Общая сумма'])),
+      total,
       gross: num(v(colIdx['Валовая прибыль'])),
-      deliveryCost: cDeliveryCost != null ? num(v(cDeliveryCost)) : 0,
+      deliveryCost,
+      deliveryRevenue,
+      deliveryCommission,
+      deliveryMargin: deliveryRevenue - deliveryCost - deliveryCommission,
+      frameRevenue,
+      frameCost,
+      frameCommission,
+      frameMargin: frameRevenue - frameCost - frameCommission,
     });
   }
 }
@@ -451,6 +493,7 @@ function render() {
 
   renderCards(rows, segments, perSegment);
   renderMainTable(rows, segments, perSegment);
+  renderFrameTable(rows);
   renderCostsTable(breakdown);
   renderGroupRules();
 }
@@ -492,12 +535,24 @@ function groupRowsBy(rows, mode) {
   const map = new Map();
   for (const r of rows) {
     const key = groupKeyFor(mode, r);
-    if (!map.has(key)) map.set(key, { key, orders: 0, revenue: 0, gross: 0, deliveryCost: 0, shop: r.shop, source: r.source, sourceGroup: r.sourceGroup });
+    if (!map.has(key)) map.set(key, {
+      key, orders: 0, revenue: 0, gross: 0, deliveryCost: 0,
+      deliveryRevenue: 0, deliveryCommission: 0, deliveryMargin: 0,
+      frameRevenue: 0, frameCost: 0, frameCommission: 0, frameMargin: 0,
+      shop: r.shop, source: r.source, sourceGroup: r.sourceGroup,
+    });
     const g = map.get(key);
     g.orders++;
     g.revenue += r.total;
     g.gross += r.gross;
     g.deliveryCost += r.deliveryCost;
+    g.deliveryRevenue += r.deliveryRevenue;
+    g.deliveryCommission += r.deliveryCommission;
+    g.deliveryMargin += r.deliveryMargin;
+    g.frameRevenue += r.frameRevenue;
+    g.frameCost += r.frameCost;
+    g.frameCommission += r.frameCommission;
+    g.frameMargin += r.frameMargin;
   }
   return [...map.values()].sort((a,b) => b.revenue - a.revenue);
 }
@@ -511,7 +566,7 @@ function renderMainTable(rows, segments, perSegment) {
     sourceDetail:'Свод по источникам (детально)',
     cross:       'Свод по магазину × группе источников',
     crossDetail: 'Свод по магазину × источнику (детально)',
-    delivery:    'Аналитика по виду доставки',
+    delivery:    'Маржинальность по виду доставки',
   };
   document.getElementById('tableTitle').textContent = titles[grouping];
   const groups = groupRowsBy(rows, grouping);
@@ -520,16 +575,20 @@ function renderMainTable(rows, segments, perSegment) {
   if (grouping === 'delivery') {
     const totalRevenue = rows.reduce((a,r) => a + r.total, 0);
     table.querySelector('thead').innerHTML = `<tr>
-      <th>Вид доставки</th><th>Заказов</th><th>Выручка</th><th>Доля выручки</th><th>Стоимость доставки</th><th>Доставка / заказ</th>
+      <th>Вид доставки</th><th>Заказов</th><th>Выручка заказа</th>
+      <th>Доплата за доставку</th><th>С/С доставки</th><th>Доля комиссий</th>
+      <th>Маржа доставки</th><th>Маржа, % от доплаты</th>
     </tr>`;
     table.querySelector('tbody').innerHTML = groups.map(g => `
       <tr>
         <td>${g.key}</td>
         <td>${fmtN(g.orders)}</td>
         <td>${fmt(g.revenue)}</td>
-        <td>${pct(g.revenue, totalRevenue)}</td>
+        <td>${fmt(g.deliveryRevenue)}</td>
         <td class="t-purple">${fmt(g.deliveryCost)}</td>
-        <td>${fmt(g.orders ? g.deliveryCost / g.orders : 0)}</td>
+        <td class="t-purple">${fmt(g.deliveryCommission)}</td>
+        <td class="${g.deliveryMargin >= 0 ? 't-green' : 't-red'}">${fmt(g.deliveryMargin)}</td>
+        <td>${pct(g.deliveryMargin, g.deliveryRevenue)}</td>
       </tr>`).join('') + totalRow(groups, totalRevenue);
     return;
   }
@@ -564,14 +623,69 @@ function totalRow(groups, totalRevenue) {
   const orders = groups.reduce((a,g) => a + g.orders, 0);
   const revenue = groups.reduce((a,g) => a + g.revenue, 0);
   const deliveryCost = groups.reduce((a,g) => a + g.deliveryCost, 0);
+  const deliveryRevenue = groups.reduce((a,g) => a + g.deliveryRevenue, 0);
+  const deliveryCommission = groups.reduce((a,g) => a + g.deliveryCommission, 0);
+  const deliveryMargin = groups.reduce((a,g) => a + g.deliveryMargin, 0);
   return `<tr class="total">
     <td>Итого</td>
     <td>${fmtN(orders)}</td>
     <td>${fmt(revenue)}</td>
-    <td>100%</td>
+    <td>${fmt(deliveryRevenue)}</td>
     <td>${fmt(deliveryCost)}</td>
-    <td>${fmt(orders ? deliveryCost / orders : 0)}</td>
+    <td>${fmt(deliveryCommission)}</td>
+    <td class="${deliveryMargin >= 0 ? 't-green' : 't-red'}">${fmt(deliveryMargin)}</td>
+    <td>${pct(deliveryMargin, deliveryRevenue)}</td>
   </tr>`;
+}
+
+// маржа по рамам считается так же, как по доставке, но в разрезе магазина —
+// «вид доставки» к рамам не привязан, а магазин даёт полезный аналитический срез
+function renderFrameTable(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    if (!map.has(r.shop)) map.set(r.shop, {
+      key: r.shop, orders: 0, ordersWithFrame: 0,
+      frameRevenue: 0, frameCost: 0, frameCommission: 0, frameMargin: 0,
+    });
+    const g = map.get(r.shop);
+    g.orders++;
+    if (r.frameRevenue || r.frameCost) g.ordersWithFrame++;
+    g.frameRevenue += r.frameRevenue;
+    g.frameCost += r.frameCost;
+    g.frameCommission += r.frameCommission;
+    g.frameMargin += r.frameMargin;
+  }
+  const groups = [...map.values()].sort((a,b) => b.frameRevenue - a.frameRevenue);
+  const table = document.getElementById('frameTable');
+  table.querySelector('thead').innerHTML = `<tr>
+    <th>Магазин</th><th>Заказов с рамой</th><th>Цена рам для клиента</th>
+    <th>С/С рам</th><th>Доля комиссий</th><th>Маржа рам</th><th>Маржа, % от цены</th>
+  </tr>`;
+  table.querySelector('tbody').innerHTML = groups.map(g => `
+    <tr>
+      <td>${g.key}</td>
+      <td>${fmtN(g.ordersWithFrame)}</td>
+      <td>${fmt(g.frameRevenue)}</td>
+      <td class="t-purple">${fmt(g.frameCost)}</td>
+      <td class="t-purple">${fmt(g.frameCommission)}</td>
+      <td class="${g.frameMargin >= 0 ? 't-green' : 't-red'}">${fmt(g.frameMargin)}</td>
+      <td>${pct(g.frameMargin, g.frameRevenue)}</td>
+    </tr>`).join('') + (() => {
+      const ordersWithFrame = groups.reduce((a,g) => a + g.ordersWithFrame, 0);
+      const frameRevenue = groups.reduce((a,g) => a + g.frameRevenue, 0);
+      const frameCost = groups.reduce((a,g) => a + g.frameCost, 0);
+      const frameCommission = groups.reduce((a,g) => a + g.frameCommission, 0);
+      const frameMargin = groups.reduce((a,g) => a + g.frameMargin, 0);
+      return `<tr class="total">
+        <td>Итого</td>
+        <td>${fmtN(ordersWithFrame)}</td>
+        <td>${fmt(frameRevenue)}</td>
+        <td>${fmt(frameCost)}</td>
+        <td>${fmt(frameCommission)}</td>
+        <td class="${frameMargin >= 0 ? 't-green' : 't-red'}">${fmt(frameMargin)}</td>
+        <td>${pct(frameMargin, frameRevenue)}</td>
+      </tr>`;
+    })();
 }
 
 function totalRowPnL(groups, perSegment, segments) {
