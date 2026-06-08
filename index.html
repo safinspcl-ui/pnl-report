@@ -93,10 +93,12 @@ footer{font-size:.74rem;color:#4a5568;text-align:center;margin-top:30px;padding-
   <div class="ctrl-row">
     <span class="ctrl-label">Группировка</span>
     <div class="tabs">
-      <button class="btn active" id="grp-shop"   onclick="setGroup('shop')">По магазину</button>
-      <button class="btn"        id="grp-source" onclick="setGroup('source')">По источнику</button>
-      <button class="btn"        id="grp-cross"  onclick="setGroup('cross')">Магазин × источник</button>
-      <button class="btn"        id="grp-delivery" onclick="setGroup('delivery')">По виду доставки</button>
+      <button class="btn active" id="grp-shop"         onclick="setGroup('shop')">По магазину</button>
+      <button class="btn"        id="grp-source"       onclick="setGroup('source')">По группе источников</button>
+      <button class="btn"        id="grp-sourceDetail" onclick="setGroup('sourceDetail')">По источнику (детально)</button>
+      <button class="btn"        id="grp-cross"        onclick="setGroup('cross')">Магазин × группа</button>
+      <button class="btn"        id="grp-crossDetail"  onclick="setGroup('crossDetail')">Магазин × источник (детально)</button>
+      <button class="btn"        id="grp-delivery"     onclick="setGroup('delivery')">По виду доставки</button>
     </div>
   </div>
 </div>
@@ -114,7 +116,9 @@ footer{font-size:.74rem;color:#4a5568;text-align:center;margin-top:30px;padding-
   <div class="section-title">Ручные затраты (ФОТ, маркетинг, ОПР…)</div>
   <p class="hint">
     Эти статьи не приходят из таблицы сделок — они заданы во вкладке «<a href="javascript:switchTab('costs')" style="color:#76e4f7">Затраты</a>».
-    У каждой статьи свой охват (магазин / группа источника или «все») и свой метод распределения:
+    У каждой статьи свой охват — независимо комбинируются магазин, укрупнённая группа источников
+    и конкретный «сырой» источник (самый точный фильтр — им можно посадить статью ровно на один
+    источник, например на e-mail-рассылки, не трогая остальные источники той же группы) — и свой метод распределения:
     <code>none</code> — вся сумма целиком в указанный сегмент,
     <code>revenue</code> / <code>orders</code> / <code>equal</code> — распределить пропорционально выручке,
     числу заказов или поровну между сегментами, попадающими под охват.
@@ -159,13 +163,22 @@ footer{font-size:.74rem;color:#4a5568;text-align:center;margin-top:30px;padding-
       <select id="ce-shop"></select>
       <span class="ctrl-label" style="min-width:120px">Группа источника</span>
       <select id="ce-source"></select>
-      <span class="ctrl-label" style="min-width:60px">Метод</span>
+      <span class="ctrl-label" style="min-width:140px">Источник (точно)</span>
+      <select id="ce-source-detail"></select>
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">Метод</span>
       <select id="ce-allocate">
         <option value="revenue">revenue — пропорционально выручке</option>
         <option value="orders">orders — пропорционально числу заказов</option>
         <option value="equal">equal — поровну между сегментами</option>
         <option value="none">none — целиком в указанный сегмент</option>
       </select>
+      <span class="hint" style="margin:0;max-width:480px">
+        «Источник (точно)» — самый узкий фильтр: можно посадить статью ровно на один источник
+        (например, на конкретный e-mail-канал), не задевая остальные источники той же группы.
+        Оставьте «все источники», если статья относится ко всей группе или ко всем источникам сразу.
+      </span>
     </div>
     <div class="ctrl-row">
       <button class="btn active" onclick="addCostEntry()">Добавить статью</button>
@@ -201,23 +214,29 @@ const SOURCE_GROUPS = {
   'Etsy': ['Etsy', 'Etsy Organic', 'Etsy Ads'],
 };
 
-// Ручные статьи затрат, не вытекающие из отдельных сделок (ФОТ, маркетинг, ОПР и т.п.)
+// Ручные статьи затрат, не вытекающие из отдельных сделок (ФОТ, маркетинг, ОПР, e-mail рассылки и т.п.)
 //   article    — название статьи (можно дублировать название для разных охватов)
 //   amount     — сумма за выбранный период, $
 //   shop       — 'Portraithy' | 'Sambanis' | 'all'
-//   sourceGroup— 'Etsy' | 'E-com' | 'all'
-//   allocate   — как распределить сумму между сегментами (магазин × группа источника),
-//                которые попадают под охват (shop/sourceGroup):
+//   sourceGroup— укрупнённая группа источников ('Etsy' / 'E-com' / …) или 'all'
+//   source     — конкретный «сырой» источник из таблицы (например, 'Etsy Ads', 'Direct',
+//                'По рекомендации', 'Organic Search') или 'all'. Это самый точный фильтр —
+//                им удобно сажать затрату ровно на один источник (e-mail-маркетинг и т.п.),
+//                которого нет ни у каких других магазинов/групп. Если задан — действует
+//                ВМЕСТЕ с shop и sourceGroup (все условия должны совпасть одновременно).
+//   allocate   — как распределить сумму между сегментами (магазин × источник),
+//                которые попадают под охват (shop/sourceGroup/source):
 //                  'none'    — охват уже задаёт ровно один сегмент, сумма идёт туда целиком
 //                  'revenue' — пропорционально выручке сегментов
 //                  'orders'  — пропорционально числу заказов сегментов
 //                  'equal'   — поровну между сегментами
 const MANUAL_COSTS = [
-  { article: 'ФОТ',       amount: 0, shop: 'all', sourceGroup: 'all', allocate: 'revenue' },
-  { article: 'Маркетинг', amount: 0, shop: 'all', sourceGroup: 'all', allocate: 'revenue' },
-  { article: 'ОПР',       amount: 0, shop: 'all', sourceGroup: 'all', allocate: 'revenue' },
-  // Пример статьи, привязанной к конкретному магазину и группе источников:
-  // { article: 'Маркетинг Etsy (Portraithy)', amount: 5000, shop: 'Portraithy', sourceGroup: 'Etsy', allocate: 'none' },
+  { article: 'ФОТ',       amount: 0, shop: 'all', sourceGroup: 'all', source: 'all', allocate: 'revenue' },
+  { article: 'Маркетинг', amount: 0, shop: 'all', sourceGroup: 'all', source: 'all', allocate: 'revenue' },
+  { article: 'ОПР',       amount: 0, shop: 'all', sourceGroup: 'all', source: 'all', allocate: 'revenue' },
+  // Примеры более точных охватов:
+  // { article: 'Маркетинг Etsy (Portraithy)', amount: 5000, shop: 'Portraithy', sourceGroup: 'Etsy', source: 'all', allocate: 'none' },
+  // { article: 'E-mail маркетинг', amount: 800, shop: 'all', sourceGroup: 'all', source: 'По рекомендации', allocate: 'none' },
 ];
 
 const MIN_DATE = '2026-05-01';
@@ -239,9 +258,9 @@ let costsConfig = loadCostsConfig();
 function loadCostsConfig() {
   try {
     const raw = localStorage.getItem(COSTS_LS_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) return JSON.parse(raw).map(c => ({ source: 'all', ...c })); // 'source' — новое поле, подставляем default для старых записей
   } catch(e) {}
-  return MANUAL_COSTS.map(c => ({ ...c }));
+  return MANUAL_COSTS.map(c => ({ source: 'all', ...c }));
 }
 function saveCostsConfig() {
   localStorage.setItem(COSTS_LS_KEY, JSON.stringify(costsConfig));
@@ -332,7 +351,7 @@ function groupOf(source) {
 ══════════════════════════════════════ */
 function setGroup(g) {
   grouping = g;
-  ['shop','source','cross','delivery'].forEach(x => {
+  ['shop','source','sourceDetail','cross','crossDetail','delivery'].forEach(x => {
     document.getElementById('grp-'+x).classList.toggle('active', x===g);
   });
   render();
@@ -347,16 +366,19 @@ function filteredRows() {
   return allRows.filter(r => (!from || r.date >= from) && (!to || r.date <= to));
 }
 
+// Сегменты строятся на самом мелком уровне — магазин × конкретный источник (не группа) —
+// чтобы можно было прицельно посадить статью затрат (например, e-mail маркетинг) ровно
+// на один источник, не задевая остальные. Группа источника хранится в сегменте как доп. атрибут
+// и используется при агрегации в более крупные срезы (по магазину, по группе, и т.д.).
 function segmentKey(r) {
-  return r.shop + ' · ' + r.sourceGroup;
+  return r.shop + ' · ' + r.source;
 }
 
-// сегменты "магазин × группа источника" — основа для распределения ручных затрат и итогового PnL
 function buildSegments(rows) {
   const map = new Map();
   for (const r of rows) {
     const key = segmentKey(r);
-    if (!map.has(key)) map.set(key, { shop: r.shop, sourceGroup: r.sourceGroup, orders: 0, revenue: 0, gross: 0 });
+    if (!map.has(key)) map.set(key, { shop: r.shop, source: r.source, sourceGroup: r.sourceGroup, orders: 0, revenue: 0, gross: 0 });
     const s = map.get(key);
     s.orders++;
     s.revenue += r.total;
@@ -365,16 +387,24 @@ function buildSegments(rows) {
   return map;
 }
 
-// распределяет суммы MANUAL_COSTS по сегментам (магазин × группа источника)
+// распределяет суммы costsConfig по сегментам (магазин × источник).
+// Охват статьи задаётся тремя независимыми фильтрами (все совпадают одновременно):
+//   shop        — конкретный магазин или 'all'
+//   sourceGroup — укрупнённая группа источников (Etsy / E-com / …) или 'all'
+//   source      — конкретный «сырой» источник (Etsy Ads, Direct, …) или 'all' —
+//                 самый точный фильтр, позволяет посадить затрату ровно на один источник,
+//                 которого может не быть ни у одного другого магазина/группы
 function allocateManualCosts(segments) {
   const segList = [...segments.values()];
   const perSegment = new Map(); // key -> сумма доп.затрат
-  const breakdown = []; // для таблицы статей: { article, amount, shop, sourceGroup, allocate, parts:[{key, amount}] }
+  const breakdown = []; // для таблицы статей: { article, amount, shop, sourceGroup, source, allocate, parts:[{key, amount}] }
 
   for (const cost of costsConfig) {
+    const costSource = cost.source || 'all';
     const matches = segList.filter(s =>
       (cost.shop === 'all' || cost.shop === s.shop) &&
-      (cost.sourceGroup === 'all' || cost.sourceGroup === s.sourceGroup)
+      (cost.sourceGroup === 'all' || cost.sourceGroup === s.sourceGroup) &&
+      (costSource === 'all' || costSource === s.source)
     );
     const parts = [];
     if (matches.length && cost.amount) {
@@ -447,15 +477,22 @@ function renderCards(rows, segments, perSegment) {
     </div>`).join('');
 }
 
+// ключ группировки в той же логике, что используется и для строк, и для проекции сегментов —
+// чтобы суммы ручных затрат корректно сворачивались в любой срез
+function groupKeyFor(mode, o) {
+  if (mode === 'shop') return o.shop;
+  if (mode === 'source') return o.sourceGroup;
+  if (mode === 'sourceDetail') return o.source;
+  if (mode === 'cross') return o.shop + ' · ' + o.sourceGroup;
+  if (mode === 'crossDetail') return o.shop + ' · ' + o.source;
+  return o.delivery;
+}
+
 function groupRowsBy(rows, mode) {
   const map = new Map();
   for (const r of rows) {
-    let key;
-    if (mode === 'shop') key = r.shop;
-    else if (mode === 'source') key = r.sourceGroup;
-    else if (mode === 'cross') key = r.shop + ' · ' + r.sourceGroup;
-    else key = r.delivery;
-    if (!map.has(key)) map.set(key, { key, orders: 0, revenue: 0, gross: 0, deliveryCost: 0, shop: r.shop, sourceGroup: r.sourceGroup });
+    const key = groupKeyFor(mode, r);
+    if (!map.has(key)) map.set(key, { key, orders: 0, revenue: 0, gross: 0, deliveryCost: 0, shop: r.shop, source: r.source, sourceGroup: r.sourceGroup });
     const g = map.get(key);
     g.orders++;
     g.revenue += r.total;
@@ -465,14 +502,16 @@ function groupRowsBy(rows, mode) {
   return [...map.values()].sort((a,b) => b.revenue - a.revenue);
 }
 
-// для группировок shop / source / cross считаем чистую прибыль (с распределёнными ручными затратами);
+// для всех группировок, кроме delivery, считаем чистую прибыль (с распределёнными ручными затратами);
 // для delivery — это просто аналитический срез по стоимости доставки, без привязки к чистой прибыли
 function renderMainTable(rows, segments, perSegment) {
   const titles = {
-    shop:   'Свод по магазинам',
-    source: 'Свод по группам источников',
-    cross:  'Свод по магазину × группе источников',
-    delivery: 'Аналитика по виду доставки',
+    shop:        'Свод по магазинам',
+    source:      'Свод по группам источников',
+    sourceDetail:'Свод по источникам (детально)',
+    cross:       'Свод по магазину × группе источников',
+    crossDetail: 'Свод по магазину × источнику (детально)',
+    delivery:    'Аналитика по виду доставки',
   };
   document.getElementById('tableTitle').textContent = titles[grouping];
   const groups = groupRowsBy(rows, grouping);
@@ -500,16 +539,12 @@ function renderMainTable(rows, segments, perSegment) {
     <th>Ручные затраты</th><th>Чистая прибыль</th><th>Маржа чист.</th>
   </tr>`;
   table.querySelector('tbody').innerHTML = groups.map(g => {
+    // суммируем по всем сегментам (магазин × источник), чья проекция на эту группировку совпадает с g.key —
+    // так любая статья, посаженная хоть на конкретный источник, хоть на целую группу, попадёт в нужный срез
     let manual = 0;
-    if (grouping === 'cross') {
-      manual = perSegment.get(g.key) || 0;
-    } else {
-      // суммируем по всем сегментам, чья проекция на эту группировку совпадает с g.key
-      for (const [segKey, amount] of perSegment.entries()) {
-        const seg = segments.get(segKey);
-        const projected = grouping === 'shop' ? seg.shop : seg.sourceGroup;
-        if (projected === g.key) manual += amount;
-      }
+    for (const [segKey, amount] of perSegment.entries()) {
+      const seg = segments.get(segKey);
+      if (groupKeyFor(grouping, seg) === g.key) manual += amount;
     }
     const net = g.gross - manual;
     return `<tr>
@@ -563,9 +598,14 @@ function renderCostsTable(breakdown) {
     <th>Статья</th><th>Сумма</th><th>Охват</th><th>Метод</th><th>Куда легло (сегмент → сумма)</th>
   </tr>`;
   table.querySelector('tbody').innerHTML = breakdown.map(b => {
-    const scope = `${b.shop === 'all' ? 'все магазины' : b.shop} / ${b.sourceGroup === 'all' ? 'все источники' : b.sourceGroup}`;
+    const scopeParts = [
+      b.shop === 'all' ? 'все магазины' : b.shop,
+      b.sourceGroup === 'all' ? 'все группы источников' : 'группа «' + b.sourceGroup + '»',
+    ];
+    if (b.source && b.source !== 'all') scopeParts.push('источник «' + b.source + '»');
+    const scope = scopeParts.join(' / ');
     const parts = b.parts.length
-      ? b.parts.map(p => `${p.seg.shop} · ${p.seg.sourceGroup}: ${fmt(p.amount)}`).join('<br>')
+      ? b.parts.map(p => `${p.seg.shop} · ${p.seg.source}: ${fmt(p.amount)}`).join('<br>')
       : '<span class="t-dim">нет совпавших сегментов / сумма = 0</span>';
     return `<tr>
         <td>${b.article}</td>
@@ -601,18 +641,21 @@ function switchTab(name) {
 const SCOPE_LABELS = { all: 'все' };
 
 function scopeOptions(kind) {
-  // kind: 'shop' | 'source'
-  const values = kind === 'shop'
-    ? [...new Set(allRows.map(r => r.shop))]
-    : [...new Set(allRows.map(r => r.sourceGroup))];
+  // kind: 'shop' | 'sourceGroup' | 'source'
+  const values =
+    kind === 'shop'        ? [...new Set(allRows.map(r => r.shop))] :
+    kind === 'sourceGroup' ? [...new Set(allRows.map(r => r.sourceGroup))] :
+                             [...new Set(allRows.map(r => r.source))];
   return ['all', ...values.sort()];
 }
 
 function populateCostFormSelects() {
   const shopSel = document.getElementById('ce-shop');
-  const sourceSel = document.getElementById('ce-source');
+  const groupSel = document.getElementById('ce-source');
+  const detailSel = document.getElementById('ce-source-detail');
   shopSel.innerHTML = scopeOptions('shop').map(v => `<option value="${v}">${v === 'all' ? 'все магазины' : v}</option>`).join('');
-  sourceSel.innerHTML = scopeOptions('source').map(v => `<option value="${v}">${v === 'all' ? 'все источники' : v}</option>`).join('');
+  groupSel.innerHTML = scopeOptions('sourceGroup').map(v => `<option value="${v}">${v === 'all' ? 'все группы' : v}</option>`).join('');
+  detailSel.innerHTML = scopeOptions('source').map(v => `<option value="${v}">${v === 'all' ? 'все источники' : v}</option>`).join('');
 }
 
 function addCostEntry() {
@@ -620,13 +663,14 @@ function addCostEntry() {
   const amount = num(document.getElementById('ce-amount').value);
   const shop = document.getElementById('ce-shop').value || 'all';
   const sourceGroup = document.getElementById('ce-source').value || 'all';
+  const source = document.getElementById('ce-source-detail').value || 'all';
   const allocate = document.getElementById('ce-allocate').value;
   const msg = document.getElementById('ce-msg');
 
   if (!article) { msg.textContent = 'Укажите название статьи.'; msg.className = 'hint t-red'; return; }
   if (!amount)  { msg.textContent = 'Укажите сумму больше нуля.'; msg.className = 'hint t-red'; return; }
 
-  costsConfig.push({ article, amount, shop, sourceGroup, allocate });
+  costsConfig.push({ article, amount, shop, sourceGroup, source, allocate });
   saveCostsConfig();
   document.getElementById('ce-article').value = '';
   document.getElementById('ce-amount').value = '';
@@ -657,10 +701,10 @@ function renderCostsEditor() {
   populateCostFormSelects();
   const table = document.getElementById('costsEditTable');
   table.querySelector('thead').innerHTML = `<tr>
-    <th>Статья</th><th>Сумма</th><th>Магазин</th><th>Группа источника</th><th>Метод</th><th></th>
+    <th>Статья</th><th>Сумма</th><th>Магазин</th><th>Группа источника</th><th>Источник (точно)</th><th>Метод</th><th></th>
   </tr>`;
   if (!costsConfig.length) {
-    table.querySelector('tbody').innerHTML = `<tr><td colspan="6" class="t-dim" style="text-align:left">Пока ничего не добавлено — заполните форму выше.</td></tr>`;
+    table.querySelector('tbody').innerHTML = `<tr><td colspan="7" class="t-dim" style="text-align:left">Пока ничего не добавлено — заполните форму выше.</td></tr>`;
     return;
   }
   table.querySelector('tbody').innerHTML = costsConfig.map((c, i) => `
@@ -669,6 +713,7 @@ function renderCostsEditor() {
       <td>${fmt(c.amount)}</td>
       <td class="t-dim">${c.shop === 'all' ? 'все' : c.shop}</td>
       <td class="t-dim">${c.sourceGroup === 'all' ? 'все' : c.sourceGroup}</td>
+      <td class="t-dim">${(!c.source || c.source === 'all') ? 'все' : c.source}</td>
       <td class="t-dim">${c.allocate}</td>
       <td><button class="del-btn" onclick="removeCostEntry(${i})">Удалить</button></td>
     </tr>`).join('');
@@ -677,7 +722,7 @@ function renderCostsEditor() {
 function exportCostsAsCode() {
   const esc = s => String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
   const lines = costsConfig.map(c =>
-    `  { article: '${esc(c.article)}', amount: ${num(c.amount)}, shop: '${esc(c.shop)}', sourceGroup: '${esc(c.sourceGroup)}', allocate: '${esc(c.allocate)}' },`
+    `  { article: '${esc(c.article)}', amount: ${num(c.amount)}, shop: '${esc(c.shop)}', sourceGroup: '${esc(c.sourceGroup)}', source: '${esc(c.source || 'all')}', allocate: '${esc(c.allocate)}' },`
   );
   const code = 'const MANUAL_COSTS = [\n' + lines.join('\n') + '\n];';
   const msg = document.getElementById('ce-msg');
