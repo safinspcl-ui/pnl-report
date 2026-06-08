@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PnL отчёт</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh;padding:20px 24px}
+
+header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px}
+h1{font-size:1.35rem;font-weight:700;color:#fff}
+h2{font-size:.95rem;font-weight:600;color:#a0aec0}
+.status{display:flex;align-items:center;gap:8px;font-size:.8rem;color:#718096}
+.dot{width:8px;height:8px;border-radius:50%;background:#48bb78;animation:pulse 2s infinite}
+.dot.err{background:#fc8181;animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.btn{background:#2d3748;border:1px solid #4a5568;color:#e2e8f0;padding:7px 14px;border-radius:8px;font-size:.82rem;cursor:pointer;transition:background .15s}
+.btn:hover{background:#4a5568}
+.btn.active{background:#4c51bf;border-color:#667eea;color:#fff}
+
+.controls{background:#1a202c;border:1px solid #2d3748;border-radius:12px;padding:16px 20px;margin-bottom:20px}
+.ctrl-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.ctrl-row+.ctrl-row{margin-top:12px}
+.ctrl-label{font-size:.78rem;color:#718096;white-space:nowrap;min-width:90px}
+.tabs{display:flex;gap:4px;flex-wrap:wrap}
+input[type=date],input[type=text],input[type=number],select{background:#0f1117;border:1px solid #2d3748;color:#e2e8f0;padding:7px 10px;border-radius:8px;font-size:.84rem}
+input[type=date]{cursor:pointer}
+input[type=date]:focus,input[type=text]:focus,input[type=number]:focus,select:focus{outline:none;border-color:#667eea}
+input[type=text]{min-width:220px}
+.del-btn{background:none;border:1px solid #4a5568;color:#fc8181;border-radius:6px;padding:2px 8px;font-size:.78rem;cursor:pointer}
+.del-btn:hover{background:#4a5568}
+.sep{width:1px;background:#2d3748;align-self:stretch;margin:0 4px}
+
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:14px;margin-bottom:20px}
+.card{background:#1a202c;border:1px solid #2d3748;border-radius:12px;padding:18px 20px}
+.card-label{font-size:.72rem;color:#718096;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+.card-value{font-size:1.6rem;font-weight:700}
+.card-value.green{color:#68d391}
+.card-value.blue{color:#76e4f7}
+.card-value.purple{color:#b794f4}
+.card-value.red{color:#fc8181}
+.card-sub{font-size:.75rem;color:#718096;margin-top:3px}
+
+section{margin-bottom:24px}
+.section-title{font-size:.78rem;font-weight:600;color:#a0aec0;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px}
+.hint{font-size:.78rem;color:#718096;margin-bottom:12px;line-height:1.5}
+code{background:#0f1117;border:1px solid #2d3748;border-radius:4px;padding:1px 5px;font-size:.82em;color:#cbd5e0}
+
+.table-wrap{background:#1a202c;border:1px solid #2d3748;border-radius:12px;overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:.84rem}
+th{background:#2d3748;color:#a0aec0;font-weight:600;text-align:left;padding:10px 16px;font-size:.74rem;text-transform:uppercase;letter-spacing:.05em;white-space:nowrap}
+th:not(:first-child){text-align:right}
+td{padding:9px 16px;border-top:1px solid #2d3748;white-space:nowrap}
+td:not(:first-child){text-align:right;font-variant-numeric:tabular-nums}
+tr:hover td{background:#2d3748}
+tr.total td{font-weight:700;border-top:2px solid #4a5568;color:#fff}
+.t-green{color:#68d391}
+.t-blue{color:#76e4f7}
+.t-purple{color:#b794f4}
+.t-red{color:#fc8181}
+.t-dim{color:#718096}
+.scroll-x{overflow-x:auto}
+footer{font-size:.74rem;color:#4a5568;text-align:center;margin-top:30px;padding-bottom:10px}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>PnL отчёт — Portraithy / Sambanis</h1>
+  <div class="status">
+    <span class="dot" id="dot"></span>
+    <span id="lastUpdate">Загрузка…</span>
+  </div>
+</header>
+
+<div class="tabs" style="margin-bottom:20px">
+  <button class="btn active" id="tab-btn-report" onclick="switchTab('report')">Отчёт</button>
+  <button class="btn"        id="tab-btn-costs"  onclick="switchTab('costs')">Затраты</button>
+</div>
+
+<div id="tab-report">
+
+<div class="controls">
+  <div class="ctrl-row">
+    <span class="ctrl-label">Период</span>
+    <input type="date" id="dateFrom">
+    <span class="t-dim">—</span>
+    <input type="date" id="dateTo">
+    <div class="sep"></div>
+    <span class="ctrl-label" style="min-width:auto">Дата считается по «Дате отправки»</span>
+  </div>
+  <div class="ctrl-row">
+    <span class="ctrl-label">Группировка</span>
+    <div class="tabs">
+      <button class="btn active" id="grp-shop"   onclick="setGroup('shop')">По магазину</button>
+      <button class="btn"        id="grp-source" onclick="setGroup('source')">По источнику</button>
+      <button class="btn"        id="grp-cross"  onclick="setGroup('cross')">Магазин × источник</button>
+      <button class="btn"        id="grp-delivery" onclick="setGroup('delivery')">По виду доставки</button>
+    </div>
+  </div>
+</div>
+
+<div class="cards" id="cards"></div>
+
+<section>
+  <div class="section-title" id="tableTitle">Свод</div>
+  <div class="table-wrap scroll-x">
+    <table id="mainTable"><thead></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<section>
+  <div class="section-title">Ручные затраты (ФОТ, маркетинг, ОПР…)</div>
+  <p class="hint">
+    Эти статьи не приходят из таблицы сделок — они заданы во вкладке «<a href="javascript:switchTab('costs')" style="color:#76e4f7">Затраты</a>».
+    У каждой статьи свой охват (магазин / группа источника или «все») и свой метод распределения:
+    <code>none</code> — вся сумма целиком в указанный сегмент,
+    <code>revenue</code> / <code>orders</code> / <code>equal</code> — распределить пропорционально выручке,
+    числу заказов или поровну между сегментами, попадающими под охват.
+    Ниже показано, как именно сумма каждой статьи легла на сегменты за выбранный период (это и вычитается
+    из валовой прибыли при расчёте чистой).
+  </p>
+  <div class="table-wrap scroll-x">
+    <table id="costsTable"><thead></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<section>
+  <div class="section-title">Группировка источников</div>
+  <p class="hint">
+    Источники объединяются в группы по справочнику <code>SOURCE_GROUPS</code> в коде страницы.
+    Сейчас: <span id="groupRules"></span>. Источник, не попавший ни в одну явную группу, относится к «E-com».
+    Чтобы изменить правила — отредактируйте <code>SOURCE_GROUPS</code>.
+  </p>
+</section>
+
+</div><!-- /tab-report -->
+
+<div id="tab-costs" style="display:none">
+
+<section>
+  <div class="section-title">Добавить статью затрат</div>
+  <p class="hint">
+    Заполните форму и нажмите «Добавить». Статьи сохраняются в этом браузере (localStorage) и сразу
+    учитываются в отчёте на вкладке «Отчёт». Чтобы они появились у всех (на сайте на GitHub Pages),
+    нажмите «Скопировать как код» и вставьте результат в массив <code>MANUAL_COSTS</code> в файле <code>pnl.html</code>,
+    затем закоммитьте.
+  </p>
+  <div class="controls">
+    <div class="ctrl-row">
+      <span class="ctrl-label">Статья</span>
+      <input type="text" id="ce-article" placeholder="например, Маркетинг Etsy">
+      <span class="ctrl-label" style="min-width:60px">Сумма, $</span>
+      <input type="number" id="ce-amount" placeholder="0" step="0.01" style="width:120px">
+    </div>
+    <div class="ctrl-row">
+      <span class="ctrl-label">Магазин</span>
+      <select id="ce-shop"></select>
+      <span class="ctrl-label" style="min-width:120px">Группа источника</span>
+      <select id="ce-source"></select>
+      <span class="ctrl-label" style="min-width:60px">Метод</span>
+      <select id="ce-allocate">
+        <option value="revenue">revenue — пропорционально выручке</option>
+        <option value="orders">orders — пропорционально числу заказов</option>
+        <option value="equal">equal — поровну между сегментами</option>
+        <option value="none">none — целиком в указанный сегмент</option>
+      </select>
+    </div>
+    <div class="ctrl-row">
+      <button class="btn active" onclick="addCostEntry()">Добавить статью</button>
+      <button class="btn" onclick="exportCostsAsCode()">Скопировать как код (MANUAL_COSTS)</button>
+      <button class="btn" onclick="resetCostsToDefaults()">Сбросить к значениям из кода</button>
+      <span id="ce-msg" class="hint" style="margin:0"></span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="section-title">Введённые статьи</div>
+  <div class="table-wrap scroll-x">
+    <table id="costsEditTable"><thead></thead><tbody></tbody></table>
+  </div>
+</section>
+
+</div><!-- /tab-costs -->
+
+<footer>Данные — Google Sheets (live) · обновляется при каждой загрузке страницы · ручные затраты хранятся в этом браузере (localStorage)</footer>
+
+<script>
+/* ══════════════════════════════════════
+   КОНФИГ — редактируется вручную
+══════════════════════════════════════ */
+
+const SHEET_ID = '1ThE26u8GfzcJIPWGyFZSECxqq2lunnf7a8Fj9dHJ450';
+const GID = '187643350';
+
+// Группировка источников сделки в укрупнённые группы для отчёта.
+// Источник, не перечисленный ни в одном списке ниже, попадает в группу "E-com".
+const SOURCE_GROUPS = {
+  'Etsy': ['Etsy', 'Etsy Organic', 'Etsy Ads'],
+};
+
+// Ручные статьи затрат, не вытекающие из отдельных сделок (ФОТ, маркетинг, ОПР и т.п.)
+//   article    — название статьи (можно дублировать название для разных охватов)
+//   amount     — сумма за выбранный период, $
+//   shop       — 'Portraithy' | 'Sambanis' | 'all'
+//   sourceGroup— 'Etsy' | 'E-com' | 'all'
+//   allocate   — как распределить сумму между сегментами (магазин × группа источника),
+//                которые попадают под охват (shop/sourceGroup):
+//                  'none'    — охват уже задаёт ровно один сегмент, сумма идёт туда целиком
+//                  'revenue' — пропорционально выручке сегментов
+//                  'orders'  — пропорционально числу заказов сегментов
+//                  'equal'   — поровну между сегментами
+const MANUAL_COSTS = [
+  { article: 'ФОТ',       amount: 0, shop: 'all', sourceGroup: 'all', allocate: 'revenue' },
+  { article: 'Маркетинг', amount: 0, shop: 'all', sourceGroup: 'all', allocate: 'revenue' },
+  { article: 'ОПР',       amount: 0, shop: 'all', sourceGroup: 'all', allocate: 'revenue' },
+  // Пример статьи, привязанной к конкретному магазину и группе источников:
+  // { article: 'Маркетинг Etsy (Portraithy)', amount: 5000, shop: 'Portraithy', sourceGroup: 'Etsy', allocate: 'none' },
+];
+
+const MIN_DATE = '2026-05-01';
+const MAX_DATE = '2026-05-31';
+
+/* ══════════════════════════════════════
+   СОСТОЯНИЕ
+══════════════════════════════════════ */
+let allRows = [];     // { name, shop, source, sourceGroup, date, delivery, total, gross, deliveryCost }
+let grouping = 'shop';
+let colIdx = {};      // карта "название колонки" -> индекс
+let activeTab = 'report';
+
+// Рабочий список ручных статей затрат — то, что реально использует отчёт.
+// Изначально берётся из localStorage (правки из визуального редактора), а если там пусто — из MANUAL_COSTS.
+const COSTS_LS_KEY = 'pnl_manual_costs_v1';
+let costsConfig = loadCostsConfig();
+
+function loadCostsConfig() {
+  try {
+    const raw = localStorage.getItem(COSTS_LS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch(e) {}
+  return MANUAL_COSTS.map(c => ({ ...c }));
+}
+function saveCostsConfig() {
+  localStorage.setItem(COSTS_LS_KEY, JSON.stringify(costsConfig));
+}
+
+/* ══════════════════════════════════════
+   ЗАГРУЗКА ДАННЫХ (Google Sheets gviz, без авторизации)
+══════════════════════════════════════ */
+function loadData() {
+  const old = document.getElementById('_gviz');
+  if (old) old.remove();
+  window._gvizCB = function(raw) {
+    try { parseGviz(raw); setStatus(true); render(); }
+    catch(e) { setStatus(false, e.message); }
+  };
+  const s = document.createElement('script');
+  s.id = '_gviz';
+  s.src = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:json;responseHandler:_gvizCB&gid=${GID}&_=` + Date.now();
+  s.onerror = () => setStatus(false, 'Нет доступа к таблице');
+  document.head.appendChild(s);
+}
+
+function setStatus(ok, msg) {
+  document.getElementById('dot').className = 'dot' + (ok ? '' : ' err');
+  document.getElementById('lastUpdate').textContent = ok
+    ? 'Обновлено: ' + new Date().toLocaleTimeString('ru')
+    : 'Ошибка: ' + msg;
+}
+
+function num(v) {
+  if (v == null) return 0;
+  if (typeof v === 'number') return v;
+  return +String(v).replace(/\s/g,'').replace(',', '.') || 0;
+}
+
+// gviz отдаёт даты как Date(2026,4,20) (месяц с 0) либо как обычную строку "20/05/2026"
+function parseSheetDate(v) {
+  if (!v) return null;
+  const s = String(v).trim();
+  let m = s.match(/^Date\((\d+),(\d+),(\d+)\)/);
+  if (m) return `${m[1]}-${String(+m[2]+1).padStart(2,'0')}-${m[3].padStart(2,'0')}`;
+  m = s.match(/^(\d{1,2})[.\/](\d{1,2})[.\/](\d{4})$/);
+  if (m) return `${m[3]}-${m[2].padStart(2,'0')}-${m[1].padStart(2,'0')}`;
+  return null;
+}
+
+function parseGviz(json) {
+  const cols = json.table.cols.map(c => (c.label || '').trim());
+  colIdx = {};
+  cols.forEach((label, i) => { if (label) colIdx[label] = i; });
+
+  const need = ['ПЧ/ХМ', 'Источник', 'Дата отправки', 'Вид доставки', 'Общая сумма', 'Валовая прибыль'];
+  for (const n of need) {
+    if (!(n in colIdx)) throw new Error('Не найдена колонка «' + n + '»');
+  }
+  const cDeliveryCost = colIdx['Вся доставка'];
+
+  allRows = [];
+  for (const row of json.table.rows) {
+    const c = row.c || [];
+    const v = i => c[i] != null ? c[i].v : null;
+    const date = parseSheetDate(v(colIdx['Дата отправки']));
+    if (!date) continue;
+    const shop = String(v(colIdx['ПЧ/ХМ']) || '').trim();
+    const source = String(v(colIdx['Источник']) || '').trim();
+    if (!shop) continue;
+    allRows.push({
+      shop, source,
+      sourceGroup: groupOf(source),
+      date,
+      delivery: String(v(colIdx['Вид доставки']) || '').trim() || '—',
+      total: num(v(colIdx['Общая сумма'])),
+      gross: num(v(colIdx['Валовая прибыль'])),
+      deliveryCost: cDeliveryCost != null ? num(v(cDeliveryCost)) : 0,
+    });
+  }
+}
+
+function groupOf(source) {
+  for (const [group, list] of Object.entries(SOURCE_GROUPS)) {
+    if (list.includes(source)) return group;
+  }
+  return 'E-com';
+}
+
+/* ══════════════════════════════════════
+   КОНТРОЛЫ
+══════════════════════════════════════ */
+function setGroup(g) {
+  grouping = g;
+  ['shop','source','cross','delivery'].forEach(x => {
+    document.getElementById('grp-'+x).classList.toggle('active', x===g);
+  });
+  render();
+}
+
+/* ══════════════════════════════════════
+   АГРЕГАЦИЯ
+══════════════════════════════════════ */
+function filteredRows() {
+  const from = document.getElementById('dateFrom').value;
+  const to = document.getElementById('dateTo').value;
+  return allRows.filter(r => (!from || r.date >= from) && (!to || r.date <= to));
+}
+
+function segmentKey(r) {
+  return r.shop + ' · ' + r.sourceGroup;
+}
+
+// сегменты "магазин × группа источника" — основа для распределения ручных затрат и итогового PnL
+function buildSegments(rows) {
+  const map = new Map();
+  for (const r of rows) {
+    const key = segmentKey(r);
+    if (!map.has(key)) map.set(key, { shop: r.shop, sourceGroup: r.sourceGroup, orders: 0, revenue: 0, gross: 0 });
+    const s = map.get(key);
+    s.orders++;
+    s.revenue += r.total;
+    s.gross += r.gross;
+  }
+  return map;
+}
+
+// распределяет суммы MANUAL_COSTS по сегментам (магазин × группа источника)
+function allocateManualCosts(segments) {
+  const segList = [...segments.values()];
+  const perSegment = new Map(); // key -> сумма доп.затрат
+  const breakdown = []; // для таблицы статей: { article, amount, shop, sourceGroup, allocate, parts:[{key, amount}] }
+
+  for (const cost of costsConfig) {
+    const matches = segList.filter(s =>
+      (cost.shop === 'all' || cost.shop === s.shop) &&
+      (cost.sourceGroup === 'all' || cost.sourceGroup === s.sourceGroup)
+    );
+    const parts = [];
+    if (matches.length && cost.amount) {
+      if (cost.allocate === 'none') {
+        // охват должен однозначно определять один сегмент
+        if (matches.length === 1) {
+          parts.push({ seg: matches[0], amount: cost.amount });
+        } else {
+          // охват шире одного сегмента — делим поровну, чтобы сумма не потерялась
+          matches.forEach(s => parts.push({ seg: s, amount: cost.amount / matches.length }));
+        }
+      } else if (cost.allocate === 'equal') {
+        matches.forEach(s => parts.push({ seg: s, amount: cost.amount / matches.length }));
+      } else {
+        const weightOf = s => cost.allocate === 'orders' ? s.orders : s.revenue;
+        const totalWeight = matches.reduce((a, s) => a + weightOf(s), 0);
+        if (totalWeight > 0) {
+          matches.forEach(s => parts.push({ seg: s, amount: cost.amount * weightOf(s) / totalWeight }));
+        } else {
+          matches.forEach(s => parts.push({ seg: s, amount: cost.amount / matches.length }));
+        }
+      }
+    }
+    for (const p of parts) {
+      const key = segmentKey(p.seg);
+      perSegment.set(key, (perSegment.get(key) || 0) + p.amount);
+    }
+    breakdown.push({ ...cost, matched: matches.length, parts });
+  }
+  return { perSegment, breakdown };
+}
+
+/* ══════════════════════════════════════
+   РЕНДЕР
+══════════════════════════════════════ */
+const fmt  = v => '$' + v.toLocaleString('ru', {minimumFractionDigits:2, maximumFractionDigits:2});
+const fmtN = v => v.toLocaleString('ru', {minimumFractionDigits:0, maximumFractionDigits:0});
+const pct  = (a,b) => b ? (a/b*100).toFixed(1) + '%' : '—';
+
+function render() {
+  const rows = filteredRows();
+  const segments = buildSegments(rows);
+  const { perSegment, breakdown } = allocateManualCosts(segments);
+
+  renderCards(rows, segments, perSegment);
+  renderMainTable(rows, segments, perSegment);
+  renderCostsTable(breakdown);
+  renderGroupRules();
+}
+
+function renderCards(rows, segments, perSegment) {
+  const orders = rows.length;
+  const revenue = rows.reduce((a,r) => a + r.total, 0);
+  const gross = rows.reduce((a,r) => a + r.gross, 0);
+  const manualTotal = [...perSegment.values()].reduce((a,v) => a + v, 0);
+  const net = gross - manualTotal;
+
+  const cards = [
+    { label: 'Заказов', value: fmtN(orders), cls: '' },
+    { label: 'Выручка', value: fmt(revenue), cls: 'blue' },
+    { label: 'Валовая прибыль', value: fmt(gross), sub: 'маржа ' + pct(gross, revenue), cls: 'green' },
+    { label: 'Ручные затраты', value: fmt(manualTotal), sub: 'ФОТ / маркетинг / ОПР…', cls: 'purple' },
+    { label: 'Чистая прибыль', value: fmt(net), sub: 'маржа ' + pct(net, revenue), cls: net >= 0 ? 'green' : 'red' },
+  ];
+  document.getElementById('cards').innerHTML = cards.map(c => `
+    <div class="card">
+      <div class="card-label">${c.label}</div>
+      <div class="card-value ${c.cls}">${c.value}</div>
+      ${c.sub ? `<div class="card-sub">${c.sub}</div>` : ''}
+    </div>`).join('');
+}
+
+function groupRowsBy(rows, mode) {
+  const map = new Map();
+  for (const r of rows) {
+    let key;
+    if (mode === 'shop') key = r.shop;
+    else if (mode === 'source') key = r.sourceGroup;
+    else if (mode === 'cross') key = r.shop + ' · ' + r.sourceGroup;
+    else key = r.delivery;
+    if (!map.has(key)) map.set(key, { key, orders: 0, revenue: 0, gross: 0, deliveryCost: 0, shop: r.shop, sourceGroup: r.sourceGroup });
+    const g = map.get(key);
+    g.orders++;
+    g.revenue += r.total;
+    g.gross += r.gross;
+    g.deliveryCost += r.deliveryCost;
+  }
+  return [...map.values()].sort((a,b) => b.revenue - a.revenue);
+}
+
+// для группировок shop / source / cross считаем чистую прибыль (с распределёнными ручными затратами);
+// для delivery — это просто аналитический срез по стоимости доставки, без привязки к чистой прибыли
+function renderMainTable(rows, segments, perSegment) {
+  const titles = {
+    shop:   'Свод по магазинам',
+    source: 'Свод по группам источников',
+    cross:  'Свод по магазину × группе источников',
+    delivery: 'Аналитика по виду доставки',
+  };
+  document.getElementById('tableTitle').textContent = titles[grouping];
+  const groups = groupRowsBy(rows, grouping);
+  const table = document.getElementById('mainTable');
+
+  if (grouping === 'delivery') {
+    const totalRevenue = rows.reduce((a,r) => a + r.total, 0);
+    table.querySelector('thead').innerHTML = `<tr>
+      <th>Вид доставки</th><th>Заказов</th><th>Выручка</th><th>Доля выручки</th><th>Стоимость доставки</th><th>Доставка / заказ</th>
+    </tr>`;
+    table.querySelector('tbody').innerHTML = groups.map(g => `
+      <tr>
+        <td>${g.key}</td>
+        <td>${fmtN(g.orders)}</td>
+        <td>${fmt(g.revenue)}</td>
+        <td>${pct(g.revenue, totalRevenue)}</td>
+        <td class="t-purple">${fmt(g.deliveryCost)}</td>
+        <td>${fmt(g.orders ? g.deliveryCost / g.orders : 0)}</td>
+      </tr>`).join('') + totalRow(groups, totalRevenue);
+    return;
+  }
+
+  table.querySelector('thead').innerHTML = `<tr>
+    <th>Сегмент</th><th>Заказов</th><th>Выручка</th><th>Валовая прибыль</th><th>Маржа вал.</th>
+    <th>Ручные затраты</th><th>Чистая прибыль</th><th>Маржа чист.</th>
+  </tr>`;
+  table.querySelector('tbody').innerHTML = groups.map(g => {
+    let manual = 0;
+    if (grouping === 'cross') {
+      manual = perSegment.get(g.key) || 0;
+    } else {
+      // суммируем по всем сегментам, чья проекция на эту группировку совпадает с g.key
+      for (const [segKey, amount] of perSegment.entries()) {
+        const seg = segments.get(segKey);
+        const projected = grouping === 'shop' ? seg.shop : seg.sourceGroup;
+        if (projected === g.key) manual += amount;
+      }
+    }
+    const net = g.gross - manual;
+    return `<tr>
+        <td>${g.key}</td>
+        <td>${fmtN(g.orders)}</td>
+        <td>${fmt(g.revenue)}</td>
+        <td class="t-green">${fmt(g.gross)}</td>
+        <td>${pct(g.gross, g.revenue)}</td>
+        <td class="t-purple">${fmt(manual)}</td>
+        <td class="${net >= 0 ? 't-green' : 't-red'}">${fmt(net)}</td>
+        <td>${pct(net, g.revenue)}</td>
+      </tr>`;
+  }).join('') + totalRowPnL(groups, perSegment, segments);
+}
+
+function totalRow(groups, totalRevenue) {
+  const orders = groups.reduce((a,g) => a + g.orders, 0);
+  const revenue = groups.reduce((a,g) => a + g.revenue, 0);
+  const deliveryCost = groups.reduce((a,g) => a + g.deliveryCost, 0);
+  return `<tr class="total">
+    <td>Итого</td>
+    <td>${fmtN(orders)}</td>
+    <td>${fmt(revenue)}</td>
+    <td>100%</td>
+    <td>${fmt(deliveryCost)}</td>
+    <td>${fmt(orders ? deliveryCost / orders : 0)}</td>
+  </tr>`;
+}
+
+function totalRowPnL(groups, perSegment, segments) {
+  const orders = groups.reduce((a,g) => a + g.orders, 0);
+  const revenue = groups.reduce((a,g) => a + g.revenue, 0);
+  const gross = groups.reduce((a,g) => a + g.gross, 0);
+  const manual = [...perSegment.values()].reduce((a,v) => a + v, 0);
+  const net = gross - manual;
+  return `<tr class="total">
+    <td>Итого</td>
+    <td>${fmtN(orders)}</td>
+    <td>${fmt(revenue)}</td>
+    <td class="t-green">${fmt(gross)}</td>
+    <td>${pct(gross, revenue)}</td>
+    <td class="t-purple">${fmt(manual)}</td>
+    <td class="${net >= 0 ? 't-green' : 't-red'}">${fmt(net)}</td>
+    <td>${pct(net, revenue)}</td>
+  </tr>`;
+}
+
+function renderCostsTable(breakdown) {
+  const table = document.getElementById('costsTable');
+  table.querySelector('thead').innerHTML = `<tr>
+    <th>Статья</th><th>Сумма</th><th>Охват</th><th>Метод</th><th>Куда легло (сегмент → сумма)</th>
+  </tr>`;
+  table.querySelector('tbody').innerHTML = breakdown.map(b => {
+    const scope = `${b.shop === 'all' ? 'все магазины' : b.shop} / ${b.sourceGroup === 'all' ? 'все источники' : b.sourceGroup}`;
+    const parts = b.parts.length
+      ? b.parts.map(p => `${p.seg.shop} · ${p.seg.sourceGroup}: ${fmt(p.amount)}`).join('<br>')
+      : '<span class="t-dim">нет совпавших сегментов / сумма = 0</span>';
+    return `<tr>
+        <td>${b.article}</td>
+        <td>${fmt(b.amount)}</td>
+        <td class="t-dim" style="text-align:left">${scope}</td>
+        <td class="t-dim">${b.allocate}</td>
+        <td style="text-align:left;white-space:normal">${parts}</td>
+      </tr>`;
+  }).join('');
+}
+
+function renderGroupRules() {
+  const parts = Object.entries(SOURCE_GROUPS).map(([g, list]) => `«${g}» = ${list.join(' + ')}`);
+  parts.push('остальные источники → «E-com»');
+  document.getElementById('groupRules').textContent = parts.join('; ');
+}
+
+/* ══════════════════════════════════════
+   ВКЛАДКИ
+══════════════════════════════════════ */
+function switchTab(name) {
+  activeTab = name;
+  document.getElementById('tab-report').style.display = name === 'report' ? '' : 'none';
+  document.getElementById('tab-costs').style.display  = name === 'costs'  ? '' : 'none';
+  document.getElementById('tab-btn-report').classList.toggle('active', name === 'report');
+  document.getElementById('tab-btn-costs').classList.toggle('active', name === 'costs');
+  if (name === 'costs') renderCostsEditor();
+}
+
+/* ══════════════════════════════════════
+   РЕДАКТОР ЗАТРАТ (вкладка «Затраты»)
+══════════════════════════════════════ */
+const SCOPE_LABELS = { all: 'все' };
+
+function scopeOptions(kind) {
+  // kind: 'shop' | 'source'
+  const values = kind === 'shop'
+    ? [...new Set(allRows.map(r => r.shop))]
+    : [...new Set(allRows.map(r => r.sourceGroup))];
+  return ['all', ...values.sort()];
+}
+
+function populateCostFormSelects() {
+  const shopSel = document.getElementById('ce-shop');
+  const sourceSel = document.getElementById('ce-source');
+  shopSel.innerHTML = scopeOptions('shop').map(v => `<option value="${v}">${v === 'all' ? 'все магазины' : v}</option>`).join('');
+  sourceSel.innerHTML = scopeOptions('source').map(v => `<option value="${v}">${v === 'all' ? 'все источники' : v}</option>`).join('');
+}
+
+function addCostEntry() {
+  const article = document.getElementById('ce-article').value.trim();
+  const amount = num(document.getElementById('ce-amount').value);
+  const shop = document.getElementById('ce-shop').value || 'all';
+  const sourceGroup = document.getElementById('ce-source').value || 'all';
+  const allocate = document.getElementById('ce-allocate').value;
+  const msg = document.getElementById('ce-msg');
+
+  if (!article) { msg.textContent = 'Укажите название статьи.'; msg.className = 'hint t-red'; return; }
+  if (!amount)  { msg.textContent = 'Укажите сумму больше нуля.'; msg.className = 'hint t-red'; return; }
+
+  costsConfig.push({ article, amount, shop, sourceGroup, allocate });
+  saveCostsConfig();
+  document.getElementById('ce-article').value = '';
+  document.getElementById('ce-amount').value = '';
+  msg.textContent = 'Статья добавлена и сохранена в этом браузере.';
+  msg.className = 'hint t-green';
+  renderCostsEditor();
+  render();
+}
+
+function removeCostEntry(idx) {
+  costsConfig.splice(idx, 1);
+  saveCostsConfig();
+  renderCostsEditor();
+  render();
+}
+
+function resetCostsToDefaults() {
+  costsConfig = MANUAL_COSTS.map(c => ({ ...c }));
+  saveCostsConfig();
+  renderCostsEditor();
+  render();
+  const msg = document.getElementById('ce-msg');
+  msg.textContent = 'Список сброшен к значениям по умолчанию из кода (MANUAL_COSTS).';
+  msg.className = 'hint';
+}
+
+function renderCostsEditor() {
+  populateCostFormSelects();
+  const table = document.getElementById('costsEditTable');
+  table.querySelector('thead').innerHTML = `<tr>
+    <th>Статья</th><th>Сумма</th><th>Магазин</th><th>Группа источника</th><th>Метод</th><th></th>
+  </tr>`;
+  if (!costsConfig.length) {
+    table.querySelector('tbody').innerHTML = `<tr><td colspan="6" class="t-dim" style="text-align:left">Пока ничего не добавлено — заполните форму выше.</td></tr>`;
+    return;
+  }
+  table.querySelector('tbody').innerHTML = costsConfig.map((c, i) => `
+    <tr>
+      <td style="text-align:left">${c.article}</td>
+      <td>${fmt(c.amount)}</td>
+      <td class="t-dim">${c.shop === 'all' ? 'все' : c.shop}</td>
+      <td class="t-dim">${c.sourceGroup === 'all' ? 'все' : c.sourceGroup}</td>
+      <td class="t-dim">${c.allocate}</td>
+      <td><button class="del-btn" onclick="removeCostEntry(${i})">Удалить</button></td>
+    </tr>`).join('');
+}
+
+function exportCostsAsCode() {
+  const esc = s => String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+  const lines = costsConfig.map(c =>
+    `  { article: '${esc(c.article)}', amount: ${num(c.amount)}, shop: '${esc(c.shop)}', sourceGroup: '${esc(c.sourceGroup)}', allocate: '${esc(c.allocate)}' },`
+  );
+  const code = 'const MANUAL_COSTS = [\n' + lines.join('\n') + '\n];';
+  const msg = document.getElementById('ce-msg');
+  navigator.clipboard.writeText(code).then(() => {
+    msg.textContent = 'Код скопирован в буфер обмена — вставьте вместо MANUAL_COSTS в pnl.html и закоммитьте.';
+    msg.className = 'hint t-green';
+  }).catch(() => {
+    msg.textContent = 'Не удалось скопировать автоматически. Код: ' + code;
+    msg.className = 'hint t-red';
+  });
+}
+
+/* ══════════════════════════════════════
+   ИНИЦИАЛИЗАЦИЯ
+══════════════════════════════════════ */
+document.getElementById('dateFrom').value = MIN_DATE;
+document.getElementById('dateTo').value = MAX_DATE;
+document.getElementById('dateFrom').addEventListener('change', render);
+document.getElementById('dateTo').addEventListener('change', render);
+
+loadData();
+</script>
+</body>
+</html>
