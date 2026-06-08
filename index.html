@@ -237,6 +237,25 @@ footer{font-size:.74rem;color:#4a5568;text-align:center;margin-top:30px;padding-
   </div>
 </section>
 
+<section>
+  <div class="section-title">Сотрудники — перенос ФОТ между направлениями</div>
+  <p class="hint">
+    По умолчанию зарплата каждого сотрудника входит в общую статью «ФОТ» и распределяется по выручке
+    между всеми направлениями. Здесь можно вынести конкретного человека из общей суммы и задать,
+    как именно делится его зарплата — пропорционально выручке периода или вручную, в процентах
+    (доли нормализуются к 100%). Перенесённая сумма автоматически вычитается из общей статьи «ФОТ»,
+    чтобы не задвоить.
+  </p>
+  <div class="ctrl-row">
+    <span class="ctrl-label">Сотрудник</span>
+    <select id="ea-employee"></select>
+    <button class="btn active" onclick="addEmployeeAllocation()">Вынести из общего ФОТ</button>
+  </div>
+  <div class="table-wrap scroll-x">
+    <table id="employeeAllocTable"><thead></thead><tbody></tbody></table>
+  </div>
+</section>
+
 </div><!-- /tab-costs -->
 
 <footer>Данные — Google Sheets (live) · обновляется при каждой загрузке страницы · ручные затраты хранятся в этом браузере (localStorage)</footer>
@@ -311,6 +330,22 @@ let payrollAmount = null;   // сумма «ПІДСУМОК» из таблиц
 let payrollLabel = '';      // подпись месяца, под который подобрана сумма (например, «Травень 2026»)
 let salaryRows = [];        // [{ name, amount }] — построчная разбивка ЗП за месяц (без строки «ПІДСУМОК»),
                             // нужна, чтобы вручную распределить зарплату конкретного сотрудника по источникам
+
+// перенос ФОТ конкретных сотрудников между направлениями (вместо общего распределения статьи «ФОТ»):
+//   { [имя]: { dimension: 'shop'|'sourceGroup', mode: 'revenue'|'manual', shares: { [значение]: процент } } }
+// сумма таких сотрудников вычитается из общей статьи «ФОТ», чтобы не задвоить
+const EMP_ALLOC_LS_KEY = 'pnl_employee_allocations_v1';
+let employeeAllocations = loadEmployeeAllocations();
+function loadEmployeeAllocations() {
+  try {
+    const raw = localStorage.getItem(EMP_ALLOC_LS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch(e) {}
+  return {};
+}
+function saveEmployeeAllocations() {
+  localStorage.setItem(EMP_ALLOC_LS_KEY, JSON.stringify(employeeAllocations));
+}
 
 // Рабочий список ручных статей затрат — то, что реально использует отчёт.
 // Изначально берётся из localStorage (правки из визуального редактора), а если там пусто — из MANUAL_COSTS.
@@ -511,23 +546,73 @@ function buildSegments(rows) {
   return map;
 }
 
-// распределяет суммы costsConfig по сегментам (магазин × источник).
+// сотрудники, для которых задан перенос ФОТ между направлениями (вместо общего распределения статьи «ФОТ»)
+function allocatedEmployees() {
+  return salaryRows.filter(e => employeeAllocations[e.name] && e.amount > 0);
+}
+
+// строит «виртуальные» статьи затрат из переноса ФОТ конкретных сотрудников:
+// зарплата каждого делится между значениями выбранного направления (магазин или группа источников)
+// либо пропорционально выручке периода, либо по вручную заданным процентам (нормализуются к 100%)
+function computeEmployeeCostEntries(rows) {
+  const entries = [];
+  for (const e of allocatedEmployees()) {
+    const cfg = employeeAllocations[e.name];
+    const dimKey = cfg.dimension === 'shop' ? 'shop' : 'sourceGroup';
+    const values = [...new Set(rows.map(r => r[dimKey]))];
+    if (!values.length) continue;
+
+    let shares = {};
+    if (cfg.mode === 'manual') {
+      let sum = 0;
+      values.forEach(v => { const p = num((cfg.shares || {})[v]); shares[v] = p; sum += p; });
+      if (sum <= 0) continue;
+      values.forEach(v => shares[v] = shares[v] / sum);
+    } else {
+      const revByValue = {};
+      let totalRev = 0;
+      rows.forEach(r => { revByValue[r[dimKey]] = (revByValue[r[dimKey]] || 0) + r.total; totalRev += r.total; });
+      if (totalRev <= 0) continue;
+      values.forEach(v => shares[v] = (revByValue[v] || 0) / totalRev);
+    }
+    values.forEach(v => {
+      const amount = e.amount * (shares[v] || 0);
+      if (amount > 0) {
+        entries.push({
+          article: e.name, amount,
+          shop: dimKey === 'shop' ? v : 'all',
+          sourceGroup: dimKey === 'sourceGroup' ? v : 'all',
+          source: 'all', allocate: 'revenue', employeeSplit: true,
+        });
+      }
+    });
+  }
+  return entries;
+}
+
+// распределяет суммы costsConfig (плюс перенесённые ЗП сотрудников) по сегментам (магазин × источник).
 // Охват статьи задаётся тремя независимыми фильтрами (все совпадают одновременно):
 //   shop        — конкретный магазин или 'all'
 //   sourceGroup — укрупнённая группа источников (Etsy / E-com / …) или 'all'
 //   source      — конкретный «сырой» источник (Etsy Ads, Direct, …) или 'all' —
 //                 самый точный фильтр, позволяет посадить затрату ровно на один источник,
 //                 которого может не быть ни у одного другого магазина/группы
-function allocateManualCosts(segments) {
+function allocateManualCosts(segments, rows) {
   const segList = [...segments.values()];
   const perSegment = new Map(); // key -> сумма доп.затрат
   const breakdown = []; // для таблицы статей: { article, amount, shop, sourceGroup, source, allocate, parts:[{key, amount}] }
 
-  for (const cost of costsConfig) {
+  const employeeCosts = computeEmployeeCostEntries(rows);
+  // их сумма вычитается из общей статьи «ФОТ», чтобы не задвоить — эти люди уже учтены отдельно
+  const employeeAllocatedTotal = allocatedEmployees().reduce((a, e) => a + e.amount, 0);
+
+  for (const cost of [...costsConfig, ...employeeCosts]) {
     const costSource = cost.source || 'all';
-    // авто-статья ФОТ: сумма берётся из таблицы зарплат за выбранный месяц,
-    // а не из поля amount — оно используется только как запасной вариант, если данных нет
-    const amount = (cost.auto === 'payroll' && payrollAmount != null) ? payrollAmount : cost.amount;
+    // авто-статья ФОТ: сумма берётся из таблицы зарплат за выбранный месяц (за вычетом перенесённых
+    // сотрудников), а не из поля amount — оно используется только как запасной вариант, если данных нет
+    const amount = (cost.auto === 'payroll' && payrollAmount != null)
+      ? Math.max(0, payrollAmount - employeeAllocatedTotal)
+      : cost.amount;
     const matches = segList.filter(s =>
       (cost.shop === 'all' || cost.shop === s.shop) &&
       (cost.sourceGroup === 'all' || cost.sourceGroup === s.sourceGroup) &&
@@ -570,11 +655,12 @@ function allocateManualCosts(segments) {
 const fmt  = v => '$' + v.toLocaleString('ru', {minimumFractionDigits:2, maximumFractionDigits:2});
 const fmtN = v => v.toLocaleString('ru', {minimumFractionDigits:0, maximumFractionDigits:0});
 const pct  = (a,b) => b ? (a/b*100).toFixed(1) + '%' : '—';
+const escAttr = s => String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 
 function render() {
   const rows = filteredRows();
   const segments = buildSegments(rows);
-  const { perSegment, breakdown } = allocateManualCosts(segments);
+  const { perSegment, breakdown } = allocateManualCosts(segments, rows);
 
   renderCards(rows, segments, perSegment);
   renderMainTable(rows, segments, perSegment);
@@ -919,6 +1005,8 @@ function resetCostsToDefaults() {
 
 function renderCostsEditor() {
   populateCostFormSelects();
+  populateEmployeeAllocSelect();
+  renderEmployeeAllocTable();
   const table = document.getElementById('costsEditTable');
   table.querySelector('thead').innerHTML = `<tr>
     <th>Статья</th><th>Сумма</th><th>Магазин</th><th>Группа источника</th><th>Источник (точно)</th><th>Метод</th><th></th>
@@ -928,12 +1016,14 @@ function renderCostsEditor() {
     return;
   }
   const esc = s => String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+  const employeeAllocatedTotal = allocatedEmployees().reduce((a, e) => a + e.amount, 0);
   table.querySelector('tbody').innerHTML = costsConfig.map((c, i) => {
     const amountCell = c.auto === 'payroll'
-      ? `${fmt(payrollAmount != null ? payrollAmount : c.amount)}<br>` +
+      ? `${fmt(payrollAmount != null ? Math.max(0, payrollAmount - employeeAllocatedTotal) : c.amount)}<br>` +
         `<span class="t-dim" style="font-size:11px">авто, из таблицы ЗП` +
         (payrollLabel ? ` за «${payrollLabel}»` : '') +
-        (payrollAmount == null ? ' — нет данных за месяц, использовано значение по умолчанию' : '') +
+        (payrollAmount == null ? ' — нет данных за месяц, использовано значение по умолчанию'
+          : (employeeAllocatedTotal > 0 ? ` (${fmt(payrollAmount)} минус ${fmt(employeeAllocatedTotal)} перенесённых сотрудников ниже)` : '')) +
         `</span>`
       : fmt(c.amount);
     return `
@@ -958,6 +1048,129 @@ function renameCostEntry(idx, value) {
   costsConfig[idx].article = v;
   saveCostsConfig();
   render();
+}
+
+/* ─── Перенос ФОТ сотрудников между направлениями ─── */
+
+function populateEmployeeAllocSelect() {
+  const sel = document.getElementById('ea-employee');
+  const prev = sel.value;
+  const available = salaryRows.filter(e => !(e.name in employeeAllocations));
+  sel.innerHTML = available.length
+    ? available.map(e => `<option value="${escAttr(e.name)}">${e.name} — ${fmt(e.amount)}</option>`).join('')
+    : `<option value="">— все сотрудники уже в списке —</option>`;
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+function addEmployeeAllocation() {
+  const name = document.getElementById('ea-employee').value;
+  if (!name) return;
+  employeeAllocations[name] = { dimension: 'sourceGroup', mode: 'revenue', shares: {} };
+  saveEmployeeAllocations();
+  renderCostsEditor();
+  render();
+}
+
+function removeEmployeeAllocation(name) {
+  delete employeeAllocations[name];
+  saveEmployeeAllocations();
+  renderCostsEditor();
+  render();
+}
+
+function setEmployeeDimension(name, dim) {
+  if (!employeeAllocations[name]) return;
+  employeeAllocations[name].dimension = dim;
+  saveEmployeeAllocations();
+  renderCostsEditor();
+  render();
+}
+
+function setEmployeeMode(name, mode) {
+  if (!employeeAllocations[name]) return;
+  employeeAllocations[name].mode = mode;
+  saveEmployeeAllocations();
+  renderCostsEditor();
+  render();
+}
+
+function setEmployeeShare(name, value, pct) {
+  const cfg = employeeAllocations[name];
+  if (!cfg) return;
+  if (!cfg.shares) cfg.shares = {};
+  cfg.shares[value] = num(pct);
+  saveEmployeeAllocations();
+  renderCostsEditor();
+  render();
+}
+
+function renderEmployeeAllocTable() {
+  const table = document.getElementById('employeeAllocTable');
+  const names = Object.keys(employeeAllocations);
+  if (!names.length) {
+    table.querySelector('thead').innerHTML = '';
+    table.querySelector('tbody').innerHTML = `<tr><td class="t-dim" style="text-align:left">
+      Список пуст — выберите сотрудника выше, чтобы вынести его зарплату из общей статьи «ФОТ»
+      и настроить перенос между направлениями.</td></tr>`;
+    return;
+  }
+  const rows = filteredRows();
+  table.querySelector('thead').innerHTML = `<tr>
+    <th>Сотрудник</th><th>Сумма ЗП</th><th>Направление</th><th>Режим</th><th>Распределение</th><th></th>
+  </tr>`;
+  table.querySelector('tbody').innerHTML = names.map(name => {
+    const e = salaryRows.find(s => s.name === name);
+    const cfg = employeeAllocations[name];
+    if (!e || !cfg) return '';
+    const dimKey = cfg.dimension === 'shop' ? 'shop' : 'sourceGroup';
+    const values = [...new Set(rows.map(r => r[dimKey]))].sort();
+
+    let pcts = {};
+    if (cfg.mode === 'manual') {
+      values.forEach(v => pcts[v] = num((cfg.shares || {})[v]));
+    } else {
+      const revByValue = {};
+      let totalRev = 0;
+      rows.forEach(r => { revByValue[r[dimKey]] = (revByValue[r[dimKey]] || 0) + r.total; totalRev += r.total; });
+      values.forEach(v => pcts[v] = totalRev > 0 ? (revByValue[v] || 0) / totalRev * 100 : 0);
+    }
+    const sumPct = values.reduce((a, v) => a + (pcts[v] || 0), 0);
+
+    const rowsHtml = values.map(v => {
+      const amount = e.amount * (sumPct > 0 ? (pcts[v] || 0) / sumPct : 0);
+      const input = cfg.mode === 'manual'
+        ? `<input type="number" min="0" max="100" step="0.1" value="${pcts[v] || ''}" placeholder="0"
+                  style="width:64px;background:#0f1117;border:1px solid #2d3748;border-radius:6px;padding:4px 6px;color:inherit"
+                  onchange="setEmployeeShare('${escAttr(name)}','${escAttr(v)}', this.value)"> %`
+        : `<span class="t-dim">${pcts[v].toFixed(1)}%</span>`;
+      return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <span style="min-width:100px">${v}</span>${input}
+        <span class="t-dim">→ ${fmt(amount)}</span>
+      </div>`;
+    }).join('');
+    const warn = (cfg.mode === 'manual' && Math.abs(sumPct - 100) > 0.05)
+      ? `<div class="t-red" style="font-size:11px;margin-top:2px">Сумма долей: ${sumPct.toFixed(1)}% — при расчёте будет нормализовано до 100%</div>`
+      : '';
+
+    return `<tr>
+      <td style="text-align:left">${name}</td>
+      <td>${fmt(e.amount)}</td>
+      <td>
+        <select onchange="setEmployeeDimension('${escAttr(name)}', this.value)">
+          <option value="sourceGroup" ${cfg.dimension !== 'shop' ? 'selected' : ''}>Группа источников (Etsy / E-com)</option>
+          <option value="shop" ${cfg.dimension === 'shop' ? 'selected' : ''}>Магазин (Portraithy / Sambanis)</option>
+        </select>
+      </td>
+      <td>
+        <select onchange="setEmployeeMode('${escAttr(name)}', this.value)">
+          <option value="revenue" ${cfg.mode !== 'manual' ? 'selected' : ''}>По выручке</option>
+          <option value="manual" ${cfg.mode === 'manual' ? 'selected' : ''}>Вручную, %</option>
+        </select>
+      </td>
+      <td style="text-align:left">${rowsHtml}${warn}</td>
+      <td><button class="del-btn" onclick="removeEmployeeAllocation('${escAttr(name)}')">Вернуть в общий ФОТ</button></td>
+    </tr>`;
+  }).join('');
 }
 
 function exportCostsAsCode() {
