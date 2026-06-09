@@ -295,9 +295,13 @@ const MANUAL_COSTS = [
   // см. SALARY_SHEET_ID/SALARY_GID) — поле amount не используется, пока идёт загрузка или нет
   // данных за месяц берётся как запасной вариант. Название статьи можно менять в редакторе —
   // авто-подстановка суммы при этом сохраняется (это определяет флаг auto:'payroll').
-  { article: 'ФОТ',       amount: 0, shop: 'all', sourceGroup: 'all', source: 'all', allocate: 'revenue', auto: 'payroll' },
-  { article: 'Маркетинг', amount: 0, shop: 'all', sourceGroup: 'all', source: 'all', allocate: 'revenue' },
-  { article: 'ОПР',       amount: 0, shop: 'all', sourceGroup: 'all', source: 'all', allocate: 'revenue' },
+  { article: 'ФОТ',             amount: 0, shop: 'all', sourceGroup: 'all',   source: 'all', allocate: 'revenue', auto: 'payroll' },
+  // ОПР = Затраты на содержание компании (сумма E-com CF + Etsy CF), пропорционально выручке по всем направлениям
+  { article: 'ОПР',             amount: 0, shop: 'all', sourceGroup: 'all',   source: 'all', allocate: 'revenue', auto: 'opr' },
+  // Маркетинг E-com = весь блок «Маркетинг и продвижение» из E-com CF, только на E-com
+  { article: 'Маркетинг E-com', amount: 0, shop: 'all', sourceGroup: 'E-com', source: 'all', allocate: 'revenue', auto: 'marketing_ecom' },
+  // Маркетинг Etsy = «Продвижение на Etsy» − «Share & Save Etsy» (возврат), только на Etsy
+  { article: 'Маркетинг Etsy',  amount: 0, shop: 'all', sourceGroup: 'Etsy',  source: 'all', allocate: 'revenue', auto: 'marketing_etsy' },
   // Примеры более точных охватов:
   // { article: 'Маркетинг Etsy (Portraithy)', amount: 5000, shop: 'Portraithy', sourceGroup: 'Etsy', source: 'all', allocate: 'none' },
   // { article: 'E-mail маркетинг', amount: 800, shop: 'all', sourceGroup: 'all', source: 'По рекомендации', allocate: 'none' },
@@ -311,6 +315,11 @@ const SALARY_SHEET_ID = '1tUsNmeRK64OAdj1lU72l7miFz6Oxpfs4aO1dLcBtty4';
 const SALARY_GID = '1150220890';
 const SALARY_TOTAL_ROW = 'ПІДСУМОК';
 const UA_MONTHS = ['Січень','Лютий','Березень','Квітень','Травень','Червень','Липень','Серпень','Вересень','Жовтень','Листопад','Грудень'];
+
+// CF-таблицы: E-com и Etsy (тот же SALARY_SHEET_ID)
+// col 1=Январь, col 2=Февраль, … col N = месяц N
+const CF_ECOM_GID = '1056439022'; // CashFlow E-Com: «Маркетинг и продвижение», «Затраты на содержание компании»
+const CF_ETSY_GID = '1543104929'; // CashFlow Etsy:  «Продвижение на Etsy», «Share & Save Etsy», «Затраты на содержание компании»
 
 // колонки комиссий (со скриншота) — их сумма распределяется пропорционально
 // между составляющими заказа (доставка, рама, …) при расчёте маржи
@@ -328,6 +337,9 @@ let colIdx = {};      // карта "название колонки" -> инд�
 let activeTab = 'report';
 let payrollAmount = null;   // сумма «ПІДСУМОК» из таблицы зарплат за выбранный месяц (null — ещё не загружено/нет данных)
 let payrollLabel = '';      // подпись месяца, под который подобрана сумма (например, «Травень 2026»)
+// CF-данные за выбранный месяц: ОПР (сумма обоих CF), маркетинг E-com и Etsy
+let cfAmounts = { opr: null, marketingEcom: null, marketingEtsy: null, _oprEcom: null, _oprEtsy: null };
+let cfLabel = '';           // подпись месяца для CF (совпадает с payrollLabel / тем же dateFrom)
 let salaryRows = [];        // [{ name, amount }] — построчная разбивка ЗП за месяц (без строки «ПІДСУМОК»),
                             // нужна, чтобы вручную распределить зарплату конкретного сотрудника по источникам
 
@@ -349,7 +361,7 @@ function saveEmployeeAllocations() {
 
 // Рабочий список ручных статей затрат — то, что реально использует отчёт.
 // Изначально берётся из localStorage (правки из визуального редактора), а если там пусто — из MANUAL_COSTS.
-const COSTS_LS_KEY = 'pnl_manual_costs_v1';
+const COSTS_LS_KEY = 'pnl_manual_costs_v2';
 let costsConfig = loadCostsConfig();
 
 function loadCostsConfig() {
@@ -415,6 +427,69 @@ function parseSalary(json) {
     } else {
       salaryRows.push({ name, amount });
     }
+  }
+}
+
+function loadCFData() {
+  cfAmounts = { opr: null, marketingEcom: null, marketingEtsy: null, _oprEcom: null, _oprEtsy: null };
+  const from = document.getElementById('dateFrom').value || MIN_DATE;
+  const [y, m] = from.split('-').map(Number);
+  cfLabel = UA_MONTHS[m - 1] + ' ' + y;
+
+  ['_gviz_cf_ecom','_gviz_cf_etsy'].forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
+
+  window._gvizCBCFEcom = function(raw) {
+    try { parseCFSheet(raw, 'ecom'); } catch(e) {}
+    render();
+  };
+  window._gvizCBCFEtsy = function(raw) {
+    try { parseCFSheet(raw, 'etsy'); } catch(e) {}
+    render();
+  };
+
+  const mkScript = (id, gid, cb) => {
+    const s = document.createElement('script');
+    s.id = id;
+    s.src = `https://docs.google.com/spreadsheets/d/${SALARY_SHEET_ID}/gviz/tq?tqx=out:json;responseHandler:${cb}&gid=${gid}&_=` + Date.now();
+    document.head.appendChild(s);
+  };
+  mkScript('_gviz_cf_ecom', CF_ECOM_GID, '_gvizCBCFEcom');
+  mkScript('_gviz_cf_etsy', CF_ETSY_GID, '_gvizCBCFEtsy');
+}
+
+function parseCFSheet(json, type) {
+  const from = document.getElementById('dateFrom').value || MIN_DATE;
+  const [, m] = from.split('-').map(Number);
+  // В CF-таблицах col A = название статьи, col 1 = Январь, col 2 = Февраль, … col M = месяц M
+  const colI = m;
+
+  const getVal = label => {
+    const label2 = label.trim();
+    for (const row of json.table.rows) {
+      const cell = (row.c || [])[0];
+      const name = cell && cell.v != null ? String(cell.v).trim() : '';
+      if (name === label2) {
+        const vc = (row.c || [])[colI];
+        return vc && vc.v != null ? num(vc.v) : 0;
+      }
+    }
+    return 0;
+  };
+
+  if (type === 'ecom') {
+    cfAmounts.marketingEcom = Math.abs(getVal('Маркетинг и продвижение'));
+    cfAmounts._oprEcom = Math.abs(getVal('Затраты на содержание компании'));
+  } else { // etsy
+    const promo     = getVal('Продвижение на Etsy');
+    const shareSave = getVal('Share & Save Etsy');
+    // promo отрицательный (затрата), shareSave положительный (возврат)
+    cfAmounts.marketingEtsy = Math.max(0, Math.abs(promo) - shareSave);
+    cfAmounts._oprEtsy = Math.abs(getVal('Затраты на содержание компании'));
+  }
+
+  // Суммируем ОПР как только оба листа загружены
+  if (cfAmounts._oprEcom != null && cfAmounts._oprEtsy != null) {
+    cfAmounts.opr = cfAmounts._oprEcom + cfAmounts._oprEtsy;
   }
 }
 
@@ -610,8 +685,11 @@ function allocateManualCosts(segments, rows) {
     const costSource = cost.source || 'all';
     // авто-статья ФОТ: сумма берётся из таблицы зарплат за выбранный месяц (за вычетом перенесённых
     // сотрудников), а не из поля amount — оно используется только как запасной вариант, если данных нет
-    const amount = (cost.auto === 'payroll' && payrollAmount != null)
+    const amount = cost.auto === 'payroll' && payrollAmount != null
       ? Math.max(0, payrollAmount - employeeAllocatedTotal)
+      : cost.auto === 'opr'            && cfAmounts.opr           != null ? cfAmounts.opr
+      : cost.auto === 'marketing_ecom' && cfAmounts.marketingEcom != null ? cfAmounts.marketingEcom
+      : cost.auto === 'marketing_etsy' && cfAmounts.marketingEtsy != null ? cfAmounts.marketingEtsy
       : cost.amount;
     const matches = segList.filter(s =>
       (cost.shop === 'all' || cost.shop === s.shop) &&
@@ -1018,12 +1096,23 @@ function renderCostsEditor() {
   const esc = s => String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;');
   const employeeAllocatedTotal = allocatedEmployees().reduce((a, e) => a + e.amount, 0);
   table.querySelector('tbody').innerHTML = costsConfig.map((c, i) => {
+    const cfAutoInfo = {
+      opr:            { val: cfAmounts.opr,           hint: 'авто, CF Затраты на содержание компании (E-com + Etsy)' },
+      marketing_ecom: { val: cfAmounts.marketingEcom, hint: 'авто, CF Маркетинг и продвижение (E-com)' },
+      marketing_etsy: { val: cfAmounts.marketingEtsy, hint: 'авто, CF Продвижение на Etsy − Share&amp;Save' },
+    }[c.auto] || null;
     const amountCell = c.auto === 'payroll'
       ? `${fmt(payrollAmount != null ? Math.max(0, payrollAmount - employeeAllocatedTotal) : c.amount)}<br>` +
         `<span class="t-dim" style="font-size:11px">авто, из таблицы ЗП` +
         (payrollLabel ? ` за «${payrollLabel}»` : '') +
         (payrollAmount == null ? ' — нет данных за месяц, использовано значение по умолчанию'
           : (employeeAllocatedTotal > 0 ? ` (${fmt(payrollAmount)} минус ${fmt(employeeAllocatedTotal)} перенесённых сотрудников ниже)` : '')) +
+        `</span>`
+      : cfAutoInfo
+      ? `${fmt(cfAutoInfo.val != null ? cfAutoInfo.val : c.amount)}<br>` +
+        `<span class="t-dim" style="font-size:11px">${cfAutoInfo.hint}` +
+        (cfLabel ? ` за «${cfLabel}»` : '') +
+        (cfAutoInfo.val == null ? ' — нет данных' : '') +
         `</span>`
       : fmt(c.amount);
     return `
@@ -1194,11 +1283,12 @@ function exportCostsAsCode() {
 ══════════════════════════════════════ */
 document.getElementById('dateFrom').value = MIN_DATE;
 document.getElementById('dateTo').value = MAX_DATE;
-document.getElementById('dateFrom').addEventListener('change', () => { loadSalaryData(); render(); });
+document.getElementById('dateFrom').addEventListener('change', () => { loadSalaryData(); loadCFData(); render(); });
 document.getElementById('dateTo').addEventListener('change', render);
 
 loadData();
 loadSalaryData();
+loadCFData();
 </script>
 </body>
 </html>
