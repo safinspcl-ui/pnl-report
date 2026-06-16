@@ -63,8 +63,60 @@ tr.total td{font-weight:700;border-top:2px solid #4a5568;color:#fff}
 .scroll-x{overflow-x:auto}
 footer{font-size:.74rem;color:#4a5568;text-align:center;margin-top:30px;padding-bottom:10px}
 </style>
+<style>
+#auth-overlay{position:fixed;inset:0;background:#0f1117;display:flex;align-items:center;justify-content:center;z-index:9999}
+#auth-box{background:#1a202c;border:1px solid #2d3748;border-radius:16px;padding:40px 48px;text-align:center;min-width:320px}
+#auth-box h2{font-size:1.1rem;font-weight:600;color:#e2e8f0;margin-bottom:8px}
+#auth-box p{font-size:.8rem;color:#718096;margin-bottom:24px}
+#auth-input{width:100%;background:#0f1117;border:1px solid #2d3748;color:#e2e8f0;padding:10px 14px;border-radius:8px;font-size:.95rem;text-align:center;letter-spacing:.15em;outline:none;box-sizing:border-box}
+#auth-input:focus{border-color:#667eea}
+#auth-input.shake{animation:shake .35s}
+@keyframes shake{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-8px)}40%,80%{transform:translateX(8px)}}
+#auth-btn{margin-top:14px;width:100%;background:#4c51bf;border:none;color:#fff;padding:10px;border-radius:8px;font-size:.9rem;font-weight:600;cursor:pointer;transition:background .15s}
+#auth-btn:hover{background:#667eea}
+#auth-err{font-size:.78rem;color:#fc8181;margin-top:10px;min-height:18px}
+</style>
 </head>
 <body>
+<div id="auth-overlay">
+  <div id="auth-box">
+    <h2>PnL отчёт</h2>
+    <p>Введите пароль для доступа</p>
+    <input id="auth-input" type="password" placeholder="••••••••" autofocus onkeydown="if(event.key==='Enter')authCheck()">
+    <button id="auth-btn" onclick="authCheck()">Войти</button>
+    <div id="auth-err"></div>
+  </div>
+</div>
+<script>
+(async function(){
+  const HASH='d74ff0ee8da3b9806b18c877dbf29bbde50b5bd8e4dad7a3a725000feb82e8f1'; // SHA-256("pass")
+  const SESSION_KEY='pnl_auth_v1';
+  if(sessionStorage.getItem(SESSION_KEY)==='1'){
+    document.getElementById('auth-overlay').remove();
+    return;
+  }
+  async function sha256(s){
+    const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));
+    return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+  }
+  window.authCheck=async function(){
+    const val=document.getElementById('auth-input').value;
+    const h=await sha256(val);
+    if(h===HASH){
+      sessionStorage.setItem(SESSION_KEY,'1');
+      document.getElementById('auth-overlay').remove();
+    } else {
+      const inp=document.getElementById('auth-input');
+      document.getElementById('auth-err').textContent='Неверный пароль';
+      inp.value='';
+      inp.classList.remove('shake');
+      void inp.offsetWidth;
+      inp.classList.add('shake');
+      inp.focus();
+    }
+  };
+})();
+</script>
 
 <header>
   <h1>PnL отчёт — Portraithy / Sambanis</h1>
