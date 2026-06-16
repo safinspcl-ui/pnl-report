@@ -295,12 +295,14 @@ const MANUAL_COSTS = [
   // см. SALARY_SHEET_ID/SALARY_GID) — поле amount не используется, пока идёт загрузка или нет
   // данных за месяц берётся как запасной вариант. Название статьи можно менять в редакторе —
   // авто-подстановка суммы при этом сохраняется (это определяет флаг auto:'payroll').
-  { article: 'ФОТ',             amount: 0, shop: 'all', sourceGroup: 'all',   source: 'all', allocate: 'revenue', auto: 'payroll' },
-  // ОПР = Затраты на содержание компании (сумма E-com CF + Etsy CF), пропорционально выручке по всем направлениям
-  { article: 'ОПР',             amount: 0, shop: 'all', sourceGroup: 'all',   source: 'all', allocate: 'revenue', auto: 'opr' },
-  // Маркетинг E-com = весь блок «Маркетинг и продвижение» из E-com CF, только на E-com
+  // ФОТ по направлениям — из PnL-таблиц (строка «ФОТ» за выбранный месяц)
+  { article: 'ФОТ E-com',       amount: 0, shop: 'all', sourceGroup: 'E-com', source: 'all', allocate: 'revenue', auto: 'fot_ecom' },
+  { article: 'ФОТ Etsy',        amount: 0, shop: 'all', sourceGroup: 'Etsy',  source: 'all', allocate: 'revenue', auto: 'fot_etsy' },
+  // ОПР (Сопровождение бизнеса) по направлениям — из PnL-таблиц
+  { article: 'ОПР E-com',       amount: 0, shop: 'all', sourceGroup: 'E-com', source: 'all', allocate: 'revenue', auto: 'opr_ecom' },
+  { article: 'ОПР Etsy',        amount: 0, shop: 'all', sourceGroup: 'Etsy',  source: 'all', allocate: 'revenue', auto: 'opr_etsy' },
+  // Маркетинг по направлениям — из PnL-таблиц
   { article: 'Маркетинг E-com', amount: 0, shop: 'all', sourceGroup: 'E-com', source: 'all', allocate: 'revenue', auto: 'marketing_ecom' },
-  // Маркетинг Etsy = «Продвижение на Etsy» − «Share & Save Etsy» (возврат), только на Etsy
   { article: 'Маркетинг Etsy',  amount: 0, shop: 'all', sourceGroup: 'Etsy',  source: 'all', allocate: 'revenue', auto: 'marketing_etsy' },
   // Примеры более точных охватов:
   // { article: 'Маркетинг Etsy (Portraithy)', amount: 5000, shop: 'Portraithy', sourceGroup: 'Etsy', source: 'all', allocate: 'none' },
@@ -318,8 +320,13 @@ const UA_MONTHS = ['Січень','Лютий','Березень','Квітен�
 
 // CF-таблицы: E-com и Etsy (тот же SALARY_SHEET_ID)
 // col 1=Январь, col 2=Февраль, … col N = месяц N
-const CF_ECOM_GID = '1056439022'; // CashFlow E-Com: «Маркетинг и продвижение», «Затраты на содержание компании»
-const CF_ETSY_GID = '1543104929'; // CashFlow Etsy:  «Продвижение на Etsy», «Share & Save Etsy», «Затраты на содержание компании»
+const CF_ECOM_GID = '1056439022'; // CashFlow E-Com
+const CF_ETSY_GID = '1543104929'; // CashFlow Etsy
+
+// PnL-таблицы по направлениям — источник для ФОТ, Маркетинг и ОПР
+// Структура: строка 0 содержит год в первой колонке месяца (Jan), далее Col = yearColIdx + (month-1)
+const PNL_ECOM_GID = '1627852695'; // PnL E-com: ФОТ, «Маркетинг и продвижение», «Сопровождение бизнеса»
+const PNL_ETSY_GID = '746808515';  // PnL Etsy:  ФОТ, «Продвижение на Etsy», «Share & Save», «Сопровождение бизнеса»
 
 // колонки комиссий (со скриншота) — их сумма распределяется пропорционально
 // между составляющими заказа (доставка, рама, …) при расчёте маржи
@@ -337,9 +344,11 @@ let colIdx = {};      // карта "название колонки" -> инд�
 let activeTab = 'report';
 let payrollAmount = null;   // сумма «ПІДСУМОК» из таблицы зарплат за выбранный месяц (null — ещё не загружено/нет данных)
 let payrollLabel = '';      // подпись месяца, под который подобрана сумма (например, «Травень 2026»)
-// CF-данные за выбранный месяц: ОПР (сумма обоих CF), маркетинг E-com и Etsy
+// CF-данные за выбранный месяц (маркетинг — резервный источник, если PnL ещё не загружен)
 let cfAmounts = { opr: null, marketingEcom: null, marketingEtsy: null, _oprEcom: null, _oprEtsy: null };
-let cfLabel = '';           // подпись месяца для CF (совпадает с payrollLabel / тем же dateFrom)
+let cfLabel = '';
+// PnL-данные по направлениям за выбранный месяц (основной источник для ФОТ, маркетинг, ОПР)
+let pnlAmounts = { fotEcom: null, fotEtsy: null, mktgEcom: null, mktgEtsy: null, oprEcom: null, oprEtsy: null };
 let salaryRows = [];        // [{ name, amount }] — построчная разбивка ЗП за месяц (без строки «ПІДСУМОК»),
                             // нужна, чтобы вручную распределить зарплату конкретного сотрудника по источникам
 
@@ -361,7 +370,7 @@ function saveEmployeeAllocations() {
 
 // Рабочий список ручных статей затрат — то, что реально использует отчёт.
 // Изначально берётся из localStorage (правки из визуального редактора), а если там пусто — из MANUAL_COSTS.
-const COSTS_LS_KEY = 'pnl_manual_costs_v2';
+const COSTS_LS_KEY = 'pnl_manual_costs_v3';
 let costsConfig = loadCostsConfig();
 
 function loadCostsConfig() {
@@ -490,6 +499,66 @@ function parseCFSheet(json, type) {
   // Суммируем ОПР как только оба листа загружены
   if (cfAmounts._oprEcom != null && cfAmounts._oprEtsy != null) {
     cfAmounts.opr = cfAmounts._oprEcom + cfAmounts._oprEtsy;
+  }
+}
+
+function loadPnLData() {
+  pnlAmounts = { fotEcom: null, fotEtsy: null, mktgEcom: null, mktgEtsy: null, oprEcom: null, oprEtsy: null };
+
+  ['_gviz_pnl_ecom', '_gviz_pnl_etsy'].forEach(id => { const el = document.getElementById(id); if (el) el.remove(); });
+
+  window._gvizCBPnlEcom = function(raw) {
+    try { parsePnLSheet(raw, 'ecom'); } catch(e) {}
+    render();
+  };
+  window._gvizCBPnlEtsy = function(raw) {
+    try { parsePnLSheet(raw, 'etsy'); } catch(e) {}
+    render();
+  };
+
+  const mkScript = (id, gid, cb) => {
+    const s = document.createElement('script');
+    s.id = id;
+    s.src = `https://docs.google.com/spreadsheets/d/${SALARY_SHEET_ID}/gviz/tq?tqx=out:json;responseHandler:${cb}&gid=${gid}&_=` + Date.now();
+    document.head.appendChild(s);
+  };
+  mkScript('_gviz_pnl_ecom', PNL_ECOM_GID, '_gvizCBPnlEcom');
+  mkScript('_gviz_pnl_etsy', PNL_ETSY_GID, '_gvizCBPnlEtsy');
+}
+
+function parsePnLSheet(json, type) {
+  const from = document.getElementById('dateFrom').value || MIN_DATE;
+  const [y, m] = from.split('-').map(Number);
+
+  // Строка 0 содержит год в первой колонке январских данных
+  const row0 = (json.table.rows[0]?.c || []).map(c => c?.v ?? null);
+  const yearColIdx = row0.findIndex(v => v === y);
+  if (yearColIdx < 0) return; // данных за этот год нет
+  const colIdx = yearColIdx + (m - 1); // Jan=+0, Feb=+1, May=+4, …
+
+  const getVal = label => {
+    const lbl = label.trim();
+    for (const row of json.table.rows) {
+      const name = String((row.c || [])[0]?.v || '').trim();
+      if (name === lbl) {
+        const cell = (row.c || [])[colIdx];
+        return cell?.v != null ? num(cell.v) : 0;
+      }
+    }
+    return 0;
+  };
+
+  if (type === 'ecom') {
+    pnlAmounts.fotEcom  = Math.abs(getVal('ФОТ'));
+    pnlAmounts.mktgEcom = Math.abs(getVal('Маркетинг и продвижение'));
+    pnlAmounts.oprEcom  = Math.abs(getVal('Сопровождение бизнеса'));
+  } else { // etsy
+    pnlAmounts.fotEtsy  = Math.abs(getVal('ФОТ'));
+    const promo     = getVal('Продвижение на Etsy');
+    const shareSave = getVal('Share & Save');
+    // promo отрицательный (затрата), shareSave положительный (возврат)
+    pnlAmounts.mktgEtsy = Math.max(0, Math.abs(promo) - shareSave);
+    pnlAmounts.oprEtsy  = Math.abs(getVal('Сопровождение бизнеса'));
   }
 }
 
@@ -686,10 +755,14 @@ function allocateManualCosts(segments, rows) {
     // авто-статья ФОТ: сумма берётся из таблицы зарплат за выбранный месяц (за вычетом перенесённых
     // сотрудников), а не из поля amount — оно используется только как запасной вариант, если данных нет
     const amount = cost.auto === 'payroll' && payrollAmount != null
-      ? Math.max(0, payrollAmount - employeeAllocatedTotal)
-      : cost.auto === 'opr'            && cfAmounts.opr           != null ? cfAmounts.opr
-      : cost.auto === 'marketing_ecom' && cfAmounts.marketingEcom != null ? cfAmounts.marketingEcom
-      : cost.auto === 'marketing_etsy' && cfAmounts.marketingEtsy != null ? cfAmounts.marketingEtsy
+        ? Math.max(0, payrollAmount - employeeAllocatedTotal)
+      : cost.auto === 'fot_ecom'       && pnlAmounts.fotEcom  != null ? pnlAmounts.fotEcom
+      : cost.auto === 'fot_etsy'       && pnlAmounts.fotEtsy  != null ? pnlAmounts.fotEtsy
+      : cost.auto === 'opr_ecom'       && pnlAmounts.oprEcom  != null ? pnlAmounts.oprEcom
+      : cost.auto === 'opr_etsy'       && pnlAmounts.oprEtsy  != null ? pnlAmounts.oprEtsy
+      : cost.auto === 'marketing_ecom' && (pnlAmounts.mktgEcom ?? cfAmounts.marketingEcom) != null ? (pnlAmounts.mktgEcom ?? cfAmounts.marketingEcom)
+      : cost.auto === 'marketing_etsy' && (pnlAmounts.mktgEtsy ?? cfAmounts.marketingEtsy) != null ? (pnlAmounts.mktgEtsy ?? cfAmounts.marketingEtsy)
+      : cost.auto === 'opr'            && cfAmounts.opr        != null ? cfAmounts.opr
       : cost.amount;
     const matches = segList.filter(s =>
       (cost.shop === 'all' || cost.shop === s.shop) &&
@@ -1098,8 +1171,12 @@ function renderCostsEditor() {
   table.querySelector('tbody').innerHTML = costsConfig.map((c, i) => {
     const cfAutoInfo = {
       opr:            { val: cfAmounts.opr,           hint: 'авто, CF Затраты на содержание компании (E-com + Etsy)' },
-      marketing_ecom: { val: cfAmounts.marketingEcom, hint: 'авто, CF Маркетинг и продвижение (E-com)' },
-      marketing_etsy: { val: cfAmounts.marketingEtsy, hint: 'авто, CF Продвижение на Etsy − Share&amp;Save' },
+      marketing_ecom: { val: pnlAmounts.mktgEcom ?? cfAmounts.marketingEcom, hint: 'авто, PnL Маркетинг и продвижение (E-com)' },
+      marketing_etsy: { val: pnlAmounts.mktgEtsy ?? cfAmounts.marketingEtsy, hint: 'авто, PnL Продвижение на Etsy − Share&amp;Save (Etsy)' },
+      fot_ecom:       { val: pnlAmounts.fotEcom,  hint: 'авто, PnL ФОТ (E-com)' },
+      fot_etsy:       { val: pnlAmounts.fotEtsy,  hint: 'авто, PnL ФОТ (Etsy)' },
+      opr_ecom:       { val: pnlAmounts.oprEcom,  hint: 'авто, PnL Сопровождение бизнеса (E-com)' },
+      opr_etsy:       { val: pnlAmounts.oprEtsy,  hint: 'авто, PnL Сопровождение бизнеса (Etsy)' },
     }[c.auto] || null;
     const amountCell = c.auto === 'payroll'
       ? `${fmt(payrollAmount != null ? Math.max(0, payrollAmount - employeeAllocatedTotal) : c.amount)}<br>` +
@@ -1283,12 +1360,13 @@ function exportCostsAsCode() {
 ══════════════════════════════════════ */
 document.getElementById('dateFrom').value = MIN_DATE;
 document.getElementById('dateTo').value = MAX_DATE;
-document.getElementById('dateFrom').addEventListener('change', () => { loadSalaryData(); loadCFData(); render(); });
+document.getElementById('dateFrom').addEventListener('change', () => { loadSalaryData(); loadCFData(); loadPnLData(); render(); });
 document.getElementById('dateTo').addEventListener('change', render);
 
 loadData();
 loadSalaryData();
 loadCFData();
+loadPnLData();
 </script>
 </body>
 </html>
